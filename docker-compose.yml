@@ -1,0 +1,11 @@
+# WeChatRead RSS — 与 .env 搭配使用：cp .env.example .env 后编辑再启动
+services:
+  app:
+    image: ghcr.io/cry0404/MyWechatRss:main
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8081}:8081"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
