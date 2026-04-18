@@ -82,7 +82,6 @@ go build -o wechatread-client ./cmd/client
 | `DB_PATH` | SQLite 路径；Docker 镜像内默认 `/data/app.db`（需挂载卷）。 |
 | `PUBLIC_BASE_URL` | 对外访问根 URL，RSS 与邮件内链接依赖此项。 |
 | `FEED_ID_SALT` | RSS feedId 加盐，默认 `wechatread-rss`。 |
-| `ALLOW_REGISTER` | 是否开放注册，默认 `false`。 |
 | `BOOTSTRAP_USERNAME` / `BOOTSTRAP_PASSWORD` / `BOOTSTRAP_EMAIL` | 空库时创建首个用户；`BOOTSTRAP_PASSWORD` 为空则不自动创建。 |
 | `DEFAULT_DEVICE_NAME` | 微信读书侧设备名，默认 `wechatread-rss`。 |
 | `SMTP_HOST`、`SMTP_PORT` | 二者齐全则启用发信；否则不发邮件。 |
