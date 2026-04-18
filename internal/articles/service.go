@@ -124,7 +124,7 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 			newCount++
 		}
 
-		if err := s.fetchAndStoreContent(ctx, userID, preferID, sub.BookID, r.ReviewID, r.URL); err != nil {
+		if err := s.fetchAndStoreContent(ctx, userID, preferID, r.ReviewID, r.URL); err != nil {
 			log.Printf("fetch sub %d: content %s: %v", sub.ID, r.ReviewID, err)
 		}
 	}
@@ -207,7 +207,7 @@ func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID i
 	return items, nil
 }
 
-func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccountID int64, bookID, reviewID, mpURL string) error {
+func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccountID int64, reviewID, mpURL string) error {
 	if s.Mode == "summary" {
 		return nil
 	}
@@ -215,69 +215,25 @@ func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccoun
 	var lastErr error
 	var html string
 
-	html, lastErr = s.tryChain(ctx, bookID, reviewID, "web", func() (string, error) {
-		return s.fetchContentViaWebContent(ctx, userID, reviewID)
-	})
+	html, lastErr = s.fetchContentViaWebContent(ctx, userID, reviewID)
 	if lastErr == nil {
 		return s.Store.UpdateArticleContent(ctx, reviewID, html)
 	}
 	log.Printf("fetch content %s: web failed: %v", reviewID, lastErr)
 
 	if mpURL != "" {
-		html, lastErr = s.tryChain(ctx, bookID, reviewID, "mp", func() (string, error) {
-			return fetchMpContent(ctx, mpURL)
-		})
+		html, lastErr = fetchMpContent(ctx, mpURL)
 		if lastErr == nil {
 			return s.Store.UpdateArticleContent(ctx, reviewID, html)
 		}
 		log.Printf("fetch content %s: mp failed: %v", reviewID, lastErr)
 	}
 
-	lastErr = s.fetchContentViaShareChapterWithLog(ctx, userID, preferAccountID, bookID, reviewID)
+	lastErr = s.fetchContentViaShareChapter(ctx, userID, preferAccountID, reviewID)
 	if lastErr != nil {
 		log.Printf("fetch content %s: all chains failed", reviewID)
 	}
 	return lastErr
-}
-
-func (s *Service) tryChain(ctx context.Context, bookID, reviewID, chain string, fn func() (string, error)) (string, error) {
-	start := time.Now()
-	html, err := fn()
-	cost := time.Since(start).Milliseconds()
-	logRec := &model.ArticleFetchLog{
-		ReviewID: reviewID,
-		BookID:   bookID,
-		Chain:    chain,
-		Success:  err == nil,
-		CostMs:   cost,
-	}
-	if err != nil {
-		logRec.Error = err.Error()
-	}
-	if logErr := s.Store.RecordArticleFetchLog(ctx, logRec); logErr != nil {
-		log.Printf("record fetch log %s/%s: %v", reviewID, chain, logErr)
-	}
-	return html, err
-}
-
-func (s *Service) fetchContentViaShareChapterWithLog(ctx context.Context, userID, preferAccountID int64, bookID, reviewID string) error {
-	start := time.Now()
-	err := s.fetchContentViaShareChapter(ctx, userID, preferAccountID, reviewID)
-	cost := time.Since(start).Milliseconds()
-	logRec := &model.ArticleFetchLog{
-		ReviewID: reviewID,
-		BookID:   bookID,
-		Chain:    "shareChapter",
-		Success:  err == nil,
-		CostMs:   cost,
-	}
-	if err != nil {
-		logRec.Error = err.Error()
-	}
-	if logErr := s.Store.RecordArticleFetchLog(ctx, logRec); logErr != nil {
-		log.Printf("record fetch log %s/shareChapter: %v", reviewID, logErr)
-	}
-	return err
 }
 
 // webContentClient 用于访问 weread 网页端接口（weread.qq.com/web/*）。
@@ -293,8 +249,7 @@ var webContentClient = &http.Client{
 }
 
 func init() {
-	// 给网页端 client 挂上 cookie jar，这样首次设置 wr_vid/wr_skey 后
-	// 后续请求会自动携带（虽然实际上每次请求都是独立的，但保留扩展性）。
+
 	jar, err := cookiejar.New(nil)
 	if err == nil {
 		webContentClient.Jar = jar
@@ -430,7 +385,7 @@ func (s *Service) EnsureContent(ctx context.Context, userID int64, reviewID stri
 	if a.ContentHTML != "" {
 		return a, nil
 	}
-	if err := s.fetchAndStoreContent(ctx, userID, 0, a.BookID, reviewID, a.URL); err != nil {
+	if err := s.fetchAndStoreContent(ctx, userID, 0, reviewID, a.URL); err != nil {
 		return a, err
 	}
 	return s.Store.GetArticleByReviewID(ctx, reviewID)

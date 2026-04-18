@@ -1,30 +1,16 @@
-// Package model 定义客户端持久化层的实体。
-//
-// 字段顺序尽量和 architecture.md §6 的表结构一致，方便对照。
-// 时间统一用 Unix 秒 int64。敏感字段（skey / refresh_token / cookies）以密文存储，
-// 结构里保留的是 *已解密* 视图，便于上层逻辑直接使用；store 层负责加解密。
 package model
 
 import "time"
 
-// User 对应 users 表。JSON tag 直接决定了 /api/auth/* 返回给前端的字段名。
 type User struct {
 	ID       int64  `json:"id"`
 	Username string `json:"username"`
-	// Email 是"weread 账号失效"等通知的收件地址。注册时必填。
-	// 使用方可以在"设置"页面修改；没配置 SMTP 时字段照样存，只是不会真发信。
 	Email        string `json:"email"`
 	PasswordHash string `json:"-"`
 	CreatedAt    int64  `json:"created_at"`
 	IsAdmin      bool   `json:"is_admin"`
 }
 
-// WeReadAccount 对应 weread_accounts 表。结构里的敏感字段已是明文；
-// store 层写库前会加密。
-//
-// JSON tag 约定：
-//   - `-` 的字段（skey / refresh_token / cookies / device_id / install_id）绝不出前端；
-//   - 其余字段用 snake_case，直接对齐前端 Account 类型。
 type WeReadAccount struct {
 	ID            int64             `json:"id"`
 	UserID        int64             `json:"user_id"`
@@ -48,7 +34,6 @@ type WeReadAccount struct {
 	DeviceName string `json:"device_name"`
 }
 
-// AccountStatus 账号状态。故意用字符串而不是整数枚举，方便 DB 直接 grep 调试。
 type AccountStatus string
 
 const (
@@ -57,8 +42,6 @@ const (
 	AccountDead     AccountStatus = "dead"
 )
 
-// Subscription 对应 subscriptions 表。JSON tag 对齐前端 Subscription 类型；
-// feed_id / feed_url 由 handler 在返回时额外拼接，不落库。
 type Subscription struct {
 	ID               int64  `json:"id"`
 	UserID           int64  `json:"user_id"`
