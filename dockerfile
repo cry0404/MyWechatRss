@@ -1,5 +1,6 @@
 # 阶段1：构建前端
 FROM docker.1ms.run/node:22-alpine AS web-builder
+ENV GOPROXY=https://goproxy.cn,direct
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
