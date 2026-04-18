@@ -38,6 +38,8 @@ export default function SubscriptionDetailPage() {
     mutationFn: () => api.refreshSubscription(subscriptionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["articles", subscriptionId] });
+      queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+      queryClient.invalidateQueries({ queryKey: ["subscription", subscriptionId] });
     },
     onError: (err) => showAlert(toUserMessage(err)),
   });

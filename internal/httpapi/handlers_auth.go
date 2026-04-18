@@ -197,7 +197,7 @@ func (h *AuthHandlers) UpdatePassword(c *gin.Context) {
 		return
 	}
 	if !auth.VerifyPassword(user.PasswordHash, req.CurrentPassword) {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "current password incorrect"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "当前密码不正确"})
 		return
 	}
 	hash, err := auth.HashPassword(req.NewPassword)

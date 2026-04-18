@@ -44,26 +44,40 @@ function StatMetric({
   );
 }
 
-function StatusPill({ disabled }: { disabled: boolean }) {
+function StatusPill({
+  disabled,
+  onClick,
+  isPending,
+}: {
+  disabled: boolean;
+  onClick?: () => void;
+  isPending?: boolean;
+}) {
   if (disabled) {
     return (
-      <span
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-sm rounded-full border"
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={isPending}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 text-sm rounded-full border transition-colors hover:opacity-80 disabled:opacity-50"
         style={{ backgroundColor: "var(--color-bg-muted)", color: "var(--color-ink-muted)", borderColor: "var(--color-border-soft)" }}
       >
         <span className="h-1.5 w-1.5 rounded-sm" style={{ backgroundColor: "var(--color-ink-faint)" }} />
         已停用
-      </span>
+      </button>
     );
   }
   return (
-    <span
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-sm rounded-full border"
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={isPending}
+      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-sm rounded-full border transition-colors hover:opacity-80 disabled:opacity-50"
       style={{ backgroundColor: "var(--color-success-bg)", color: "var(--color-success)", borderColor: "var(--color-success)" }}
     >
       <span className="h-1.5 w-1.5 rounded-sm" style={{ backgroundColor: "var(--color-success)" }} />
       启用
-    </span>
+    </button>
   );
 }
 
@@ -180,8 +194,11 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
   });
 
   const createMutation = useMutation({
-    mutationFn: (data: { book_id: string; alias: string }) =>
-      api.createSubscription(data.book_id, data.alias),
+    mutationFn: async (data: { book_id: string; alias: string }) => {
+      const sub = await api.createSubscription(data.book_id, data.alias);
+      await api.refreshSubscription(sub.id);
+      return sub;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
       onClose();
@@ -297,7 +314,14 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
                   disabled={!alias.trim() || createMutation.isPending}
                   className="btn-primary text-lg flex-1 py-2.5 disabled:opacity-50"
                 >
-                  {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin mx-auto" /> : "添加"}
+                  {createMutation.isPending ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      抓取中…
+                    </span>
+                  ) : (
+                    "添加"
+                  )}
                 </button>
               </div>
             </div>
@@ -331,6 +355,15 @@ export default function SubscriptionsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.deleteSubscription(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+    },
+    onError: (err) => showAlert(toUserMessage(err)),
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, disabled }: { id: number; disabled: boolean }) =>
+      api.updateSubscription(id, { disabled }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
     },
@@ -509,7 +542,11 @@ export default function SubscriptionsPage() {
                     </Link>
                   </div>
                   <div className="col-span-2">
-                    <StatusPill disabled={sub.disabled} />
+                    <StatusPill
+                      disabled={sub.disabled}
+                      onClick={() => toggleMutation.mutate({ id: sub.id, disabled: !sub.disabled })}
+                      isPending={toggleMutation.isPending && toggleMutation.variables?.id === sub.id}
+                    />
                   </div>
                   <div className="col-span-2 text-lg" style={{ color: "var(--color-ink-light)" }}>
                     {sub.last_fetch_at ? formatRelativeTime(sub.last_fetch_at) : "—"}

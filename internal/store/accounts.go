@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/cry0404/MyWechatRss/internal/model"
@@ -181,29 +182,52 @@ func (s *Store) CountActiveAccounts(ctx context.Context, userID int64) (int, err
 	return n, err
 }
 
-func (s *Store) UpdateAccountCredential(ctx context.Context, id int64, skey, refreshToken string, cookies map[string]string) error {
+// UpdateAccountCredential 续期成功后回写凭证。nil 指针表示"weread 这次没给新值，
+// 保留旧值不动"—— 这是续期的关键语义：benign refresh 时 weread 常常只回 skey，
+// refreshToken / cookies 字段是空的，直接写空会把还能用的旧值抹掉。
+// skey 走过 server 层校验保证非空，因此这里是必传的。
+//
+// 无论哪几个字段实际被更新，status / cooldown_until / last_err 都会被重置成
+// "active 且健康"—— 续期成功本身就是"这个账号当前是活的"的最强信号。
+func (s *Store) UpdateAccountCredential(
+	ctx context.Context,
+	id int64,
+	skey string,
+	refreshToken *string,
+	cookies *map[string]string,
+) error {
 	skeyEnc, err := s.codec.Encrypt(skey)
 	if err != nil {
 		return err
 	}
-	rtEnc, err := s.codec.Encrypt(refreshToken)
-	if err != nil {
-		return err
+
+	sets := []string{"skey_enc = ?", "status = 'active'", "cooldown_until = 0", "last_err = ''"}
+	args := []any{skeyEnc}
+
+	if refreshToken != nil {
+		rtEnc, err := s.codec.Encrypt(*refreshToken)
+		if err != nil {
+			return err
+		}
+		sets = append(sets, "refresh_token_enc = ?")
+		args = append(args, rtEnc)
 	}
-	cookiesJSON, err := json.Marshal(cookies)
-	if err != nil {
-		return err
+	if cookies != nil {
+		cookiesJSON, err := json.Marshal(*cookies)
+		if err != nil {
+			return err
+		}
+		cookiesEnc, err := s.codec.Encrypt(string(cookiesJSON))
+		if err != nil {
+			return err
+		}
+		sets = append(sets, "cookies_enc = ?")
+		args = append(args, cookiesEnc)
 	}
-	cookiesEnc, err := s.codec.Encrypt(string(cookiesJSON))
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `
-        UPDATE weread_accounts
-        SET skey_enc = ?, refresh_token_enc = ?, cookies_enc = ?,
-            status = 'active', cooldown_until = 0, last_err = ''
-        WHERE id = ?
-    `, skeyEnc, rtEnc, cookiesEnc, id)
+
+	args = append(args, id)
+	query := "UPDATE weread_accounts SET " + strings.Join(sets, ", ") + " WHERE id = ?"
+	_, err = s.db.ExecContext(ctx, query, args...)
 	return err
 }
 

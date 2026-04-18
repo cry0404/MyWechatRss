@@ -94,10 +94,6 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 			}
 		}
 
-		isNew := r.PublishAt > sub.LastReviewTime
-		if isNew {
-			newCount++
-		}
 		if r.PublishAt > maxTime {
 			maxTime = r.PublishAt
 		}
@@ -113,9 +109,13 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 			ReadNum:   r.ReadNum,
 			LikeNum:   r.LikeNum,
 		}
-		if _, err := s.Store.UpsertArticle(ctx, article); err != nil {
+		isNew, err := s.Store.UpsertArticle(ctx, article)
+		if err != nil {
 			log.Printf("fetch sub %d: upsert article %s: %v", sub.ID, r.ReviewID, err)
 			continue
+		}
+		if isNew {
+			newCount++
 		}
 
 		if err := s.fetchAndStoreContent(ctx, userID, preferID, r.ReviewID, r.URL); err != nil {

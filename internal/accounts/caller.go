@@ -104,33 +104,32 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 			return nil, err
 		}
 
-		if resp.Status == 401 {
-			_ = cr.Store.MarkAccountDead(ctx, acc.UserID, acc.ID, fmt.Sprintf("HTTP 401 on %s", opt.Path))
-			lastErr = fmt.Errorf("account %d: HTTP 401", acc.ID)
-			continue
-		}
-
 		var hdr werrHeader
 		_ = json.Unmarshal(resp.Body, &hdr)
+
+		if resp.Status == 401 || hdr.ErrCode == -2012 {
+			signal := fmt.Sprintf("errcode=%d %s", hdr.ErrCode, hdr.ErrMsg)
+			if resp.Status == 401 {
+				signal = fmt.Sprintf("HTTP 401 on %s", opt.Path)
+			}
+			log.Printf("[caller] session-expired account=%d vid=%d path=%s signal=%q attempt=%d -> refresh",
+				acc.ID, acc.VID, opt.Path, signal, attempt)
+			if cr.tryRefresh(ctx, acc, opt.Path) {
+				preferID = acc.ID
+				continue
+			}
+			log.Printf("[caller] mark-dead account=%d vid=%d reason=%q attempt=%d",
+				acc.ID, acc.VID, signal, attempt)
+			_ = cr.Store.MarkAccountDead(ctx, acc.UserID, acc.ID, signal)
+			lastErr = fmt.Errorf("account %d dead: %s", acc.ID, signal)
+			continue
+		}
 
 		switch hdr.ErrCode {
 		case 0:
 			_ = cr.Store.MarkAccountOK(ctx, acc.ID)
 			cr.mergeCookies(ctx, acc, resp.Cookies)
 			return &CallResult{RawJSON: resp.Body, Account: acc}, nil
-
-		case -2012:
-			log.Printf("[caller] -2012 account=%d vid=%d path=%s errmsg=%q attempt=%d -> refresh",
-				acc.ID, acc.VID, opt.Path, hdr.ErrMsg, attempt)
-			if cr.tryRefresh(ctx, acc, opt.Path) {
-				preferID = acc.ID
-				continue
-			}
-			log.Printf("[caller] mark-dead account=%d vid=%d reason=-2012 errmsg=%q attempt=%d",
-				acc.ID, acc.VID, hdr.ErrMsg, attempt)
-			_ = cr.Store.MarkAccountDead(ctx, acc.UserID, acc.ID, "errcode=-2012 "+hdr.ErrMsg)
-			lastErr = fmt.Errorf("account %d dead: -2012 %s", acc.ID, hdr.ErrMsg)
-			continue
 
 		case -2010:
 			log.Printf("[caller] -2010 cooldown account=%d vid=%d path=%s errmsg=%q",
@@ -211,20 +210,36 @@ func (cr *Caller) tryRefresh(ctx context.Context, acc *model.WeReadAccount, refC
 		return false
 	}
 
-	if err := cr.Store.UpdateAccountCredential(ctx, acc.ID, cred.SKey, cred.RefreshToken, cred.Cookies); err != nil {
+	// Benign refresh 时 weread 可能只回 skey，refreshToken / cookies 留空。
+	// 用 nil 指针显式表示"这次别动这列"，防止把还能用的旧值抹成空串。
+	var rtArg *string
+	if cred.RefreshToken != "" {
+		rtArg = &cred.RefreshToken
+	}
+	var ckArg *map[string]string
+	if len(cred.Cookies) > 0 {
+		ckArg = &cred.Cookies
+	}
+
+	if err := cr.Store.UpdateAccountCredential(ctx, acc.ID, cred.SKey, rtArg, ckArg); err != nil {
 		log.Printf("[caller refresh] save-error account=%d vid=%d err=%v elapsed=%s",
 			acc.ID, acc.VID, err, time.Since(startAt))
 		return false
 	}
+
 	oldRT := acc.RefreshToken
-
 	acc.SKey = cred.SKey
-	acc.RefreshToken = cred.RefreshToken
-	acc.Cookies = cred.Cookies
+	if rtArg != nil {
+		acc.RefreshToken = cred.RefreshToken
+	}
+	if ckArg != nil {
+		acc.Cookies = cred.Cookies
+	}
 
-	log.Printf("[caller refresh] ok account=%d vid=%d newVid=%d skeyLen=%d rtRolled=%t elapsed=%s",
+	log.Printf("[caller refresh] ok account=%d vid=%d newVid=%d skeyLen=%d rtRolled=%t ckRolled=%t elapsed=%s",
 		acc.ID, acc.VID, cred.VID, len(cred.SKey),
-		cred.RefreshToken != "" && cred.RefreshToken != oldRT,
+		rtArg != nil && cred.RefreshToken != oldRT,
+		ckArg != nil,
 		time.Since(startAt))
 	return true
 }

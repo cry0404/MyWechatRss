@@ -20,7 +20,7 @@ cp .env.example .env
    openssl rand -hex 32
    ```
 
-2. **上游服务**：向 Cry 索取并填写 `UPSTREAM_BASE_URL`、`UPSTREAM_API_KEY_ID`、`UPSTREAM_API_SECRET`。
+2. **上游服务**：向 Cry 索取并填写 `UPSTREAM_BASE_URL`、`UPSTREAM_API_KEY_ID`、`UPSTREAM_API_SECRET`。(baseurl 大概率为 https://wechat.cry4o4n0tfound.cc)
 
 3. **你的网站地址**：`PUBLIC_BASE_URL` 填你实际用来访问本服务的地址（含 `http` 或 `https`，**不要**末尾斜杠）。例如本机试跑可用 `http://127.0.0.1:8081`；公网域名则填 `https://rss.example.com`。
 

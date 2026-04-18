@@ -77,11 +77,11 @@ export default function SettingsPage() {
   const handleSaveUsername = () => {
     const v = username.trim();
     if (!v) {
-      showAlert("Username is required.");
+      showAlert("用户名不能为空。");
       return;
     }
     if (v.length < 3) {
-      showAlert("Username must be at least 3 characters.");
+      showAlert("用户名至少需要 3 个字符。");
       return;
     }
     setUsernameStatus("idle");
@@ -91,11 +91,11 @@ export default function SettingsPage() {
   const handleSaveEmail = () => {
     const v = email.trim();
     if (!v) {
-      showAlert("Email is required.");
+      showAlert("邮箱不能为空。");
       return;
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
-      showAlert("Invalid email address.");
+      showAlert("邮箱格式不正确。");
       return;
     }
     setEmailStatus("idle");
@@ -105,15 +105,15 @@ export default function SettingsPage() {
   const handleSavePassword = () => {
     setPwdStatus("idle");
     if (!currentPassword || !newPassword) {
-      showAlert("Enter current password and new password.");
+      showAlert("请输入当前密码和新密码。");
       return;
     }
     if (newPassword.length < 8) {
-      showAlert("New password must be at least 8 characters.");
+      showAlert("新密码至少需要 8 个字符。");
       return;
     }
     if (newPassword !== confirmPassword) {
-      showAlert("New password and confirmation do not match.");
+      showAlert("两次输入的新密码不一致。");
       return;
     }
     updatePassword.mutate();

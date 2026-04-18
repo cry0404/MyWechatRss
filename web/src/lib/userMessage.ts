@@ -1,14 +1,17 @@
-/** Normalize API / network errors for user-facing English messages. */
+/** Normalize API / network errors for user-facing Chinese messages. */
 export function toUserMessage(err: unknown): string {
   if (err instanceof Error && err.message) {
     const m = err.message.trim();
     if (m === "invalid credentials") {
-      return "Invalid username or password.";
+      return "用户名或密码错误。";
     }
-    if (m === "current password incorrect") {
-      return "Current password is incorrect.";
+    if (m === "当前密码不正确") {
+      return "当前密码不正确。";
+    }
+    if (m === "Session expired. Please sign in again.") {
+      return "会话已过期，请重新登录。";
     }
     return m;
   }
-  return "Something went wrong. Please try again.";
+  return "出错了，请稍后重试。";
 }

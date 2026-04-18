@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/cry0404/MyWechatRss/internal/model"
@@ -11,45 +13,47 @@ func (s *Store) UpsertArticle(ctx context.Context, a *model.Article) (isNew bool
 	if a.FetchedAt == 0 {
 		a.FetchedAt = time.Now().Unix()
 	}
-	res, err := s.db.ExecContext(ctx, `
-        INSERT INTO articles
-            (book_id, review_id, title, summary, content_html, cover_url, url,
-             publish_at, fetched_at, read_num, like_num)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (review_id) DO UPDATE SET
-            -- 列表字段按最新覆盖
-            title     = excluded.title,
-            summary   = excluded.summary,
-            cover_url = excluded.cover_url,
-            read_num  = excluded.read_num,
-            like_num  = excluded.like_num,
-            -- url / content_html 只在原来为空时才覆盖，避免这次响应里缺字段
-            -- 把已经抓到的数据冲没了。
-            url = CASE
-                WHEN IFNULL(articles.url, '') = ''
-                THEN excluded.url
-                ELSE articles.url
-            END,
-            content_html = CASE
-                WHEN IFNULL(articles.content_html, '') = ''
-                THEN excluded.content_html
-                ELSE articles.content_html
-            END
-    `,
-		a.BookID, a.ReviewID, a.Title, a.Summary, a.ContentHTML, a.CoverURL, a.URL,
-		a.PublishAt, a.FetchedAt, a.ReadNum, a.LikeNum,
-	)
-	if err != nil {
-		return false, err
-	}
-	rows, _ := res.RowsAffected()
+
+	// 先查是否存在，真正区分"插入"和"更新"，让调用方拿到准确的 isNew。
+	// MaxOpenConns=1 保证串行，无需显式事务。
 	var existingID int64
-	_ = s.db.QueryRowContext(ctx,
+	err = s.db.QueryRowContext(ctx,
 		`SELECT id FROM articles WHERE review_id = ?`, a.ReviewID,
 	).Scan(&existingID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+
+	if errors.Is(err, sql.ErrNoRows) {
+		res, err := s.db.ExecContext(ctx, `
+            INSERT INTO articles
+                (book_id, review_id, title, summary, content_html, cover_url, url,
+                 publish_at, fetched_at, read_num, like_num)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, a.BookID, a.ReviewID, a.Title, a.Summary, a.ContentHTML, a.CoverURL, a.URL,
+			a.PublishAt, a.FetchedAt, a.ReadNum, a.LikeNum,
+		)
+		if err != nil {
+			return false, err
+		}
+		a.ID, _ = res.LastInsertId()
+		return true, nil
+	}
+
+	// 已存在 — 列表字段按最新覆盖，url / content_html 只在原来为空时才覆盖
 	a.ID = existingID
-	_ = rows
-	return false, nil
+	_, err = s.db.ExecContext(ctx, `
+        UPDATE articles SET
+            title     = ?,
+            summary   = ?,
+            cover_url = ?,
+            read_num  = ?,
+            like_num  = ?,
+            url = CASE WHEN IFNULL(url, '') = '' THEN ? ELSE url END,
+            content_html = CASE WHEN IFNULL(content_html, '') = '' THEN ? ELSE content_html END
+        WHERE review_id = ?
+    `, a.Title, a.Summary, a.CoverURL, a.ReadNum, a.LikeNum, a.URL, a.ContentHTML, a.ReviewID)
+	return false, err
 }
 
 func (s *Store) ListArticlesByUser(ctx context.Context, userID int64, limit, offset int) ([]*model.Article, error) {
