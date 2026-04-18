@@ -1,5 +1,5 @@
 # 阶段1：构建前端
-FROM node:22-alpine AS web-builder
+FROM docker.1ms.run/node:22-alpine AS web-builder
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # 阶段2：构建 Go 后端
-FROM golang:1.25-alpine AS go-builder
+FROM docker.1ms.run/golang:1.25-alpine AS go-builder
 RUN apk add --no-cache git ca-certificates tzdata
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -18,7 +18,7 @@ COPY --from=web-builder /app/web/dist ./web/dist
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o wechatread-client ./cmd/client
 
 # 阶段3：最终镜像
-FROM alpine:latest
+FROM docker.1ms.run/alpine:latest
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
 COPY --from=go-builder /app/wechatread-client ./
