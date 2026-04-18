@@ -194,14 +194,13 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
   });
 
   const createMutation = useMutation({
-    mutationFn: async (data: { book_id: string; alias: string }) => {
-      const sub = await api.createSubscription(data.book_id, data.alias);
-      await api.refreshSubscription(sub.id);
-      return sub;
-    },
-    onSuccess: () => {
+    mutationFn: (data: { book_id: string; alias: string }) =>
+      api.createSubscription(data.book_id, data.alias),
+    onSuccess: (sub) => {
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
       onClose();
+      // 后台异步刷新文章，不阻塞 UI
+      api.refreshSubscription(sub.id).catch(() => {});
     },
     onError: (err) => showAlert(toUserMessage(err)),
   });

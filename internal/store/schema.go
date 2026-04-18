@@ -76,6 +76,19 @@ CREATE TABLE IF NOT EXISTS fetch_logs (
     error            TEXT    NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS article_fetch_logs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_id  TEXT    NOT NULL,
+    book_id    TEXT    NOT NULL DEFAULT '',
+    chain      TEXT    NOT NULL,
+    success    INTEGER NOT NULL DEFAULT 0,
+    cost_ms    INTEGER NOT NULL DEFAULT 0,
+    error      TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_fetch_logs_review ON article_fetch_logs(review_id);
+CREATE INDEX IF NOT EXISTS idx_fetch_logs_created ON article_fetch_logs(created_at);
+
 CREATE TABLE IF NOT EXISTS site_config (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

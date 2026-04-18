@@ -86,6 +86,10 @@ func NewRouter(
 			authed.GET("/subscriptions/:id/articles", subH.Articles)
 			authed.POST("/subscriptions/:id/refresh", subH.Refresh)
 
+			logsH := &LogsHandlers{Store: st}
+			authed.GET("/fetch-logs", logsH.ListLogs)
+			authed.GET("/fetch-stats", logsH.Stats)
+
 			cfgH := &ConfigHandlers{Store: st}
 			authed.GET("/config", cfgH.GetConfig)
 			authed.PUT("/config", cfgH.PutConfig)

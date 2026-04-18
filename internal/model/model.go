@@ -93,5 +93,27 @@ type Article struct {
 	LikeNum     int64  `json:"like_num"`
 }
 
+// ArticleFetchLog 对应 article_fetch_logs 表，记录单篇正文抓取的链路耗时与结果。
+type ArticleFetchLog struct {
+	ID        int64  `json:"id"`
+	ReviewID  string `json:"review_id"`
+	BookID    string `json:"book_id"`
+	Chain     string `json:"chain"`
+	Success   bool   `json:"success"`
+	CostMs    int64  `json:"cost_ms"`
+	Error     string `json:"error,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// FetchStats 按 chain 汇总的抓取统计。
+type FetchStats struct {
+	Chain      string  `json:"chain"`
+	Total      int64   `json:"total"`
+	Success    int64   `json:"success"`
+	Fail       int64   `json:"fail"`
+	SuccessPct float64 `json:"success_pct"`
+	AvgCostMs  int64   `json:"avg_cost_ms"`
+}
+
 // Now 统一的"当前时间"，单测里可替换；目前直接用 time.Now。
 var Now = func() time.Time { return time.Now() }

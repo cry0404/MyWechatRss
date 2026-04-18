@@ -45,6 +45,32 @@ func (s *SMTPNotifier) AccountsAllDead(ctx context.Context, ev AccountsDeadEvent
 	return s.send(ctx, ev.Email, subject, body)
 }
 
+func (s *SMTPNotifier) FetchFailureAlert(ctx context.Context, ev FetchFailureAlertEvent) error {
+	if ev.Email == "" {
+		log.Printf("[notify-smtp] fetch failure alert: no email, skip")
+		return nil
+	}
+	subject := "[WeChatRead RSS] 正文抓取失败率告警"
+	body := buildFetchFailureBody(ev)
+	return s.send(ctx, ev.Email, subject, body)
+}
+
+func buildFetchFailureBody(ev FetchFailureAlertEvent) string {
+	var b strings.Builder
+	b.WriteString("你好，\n\n")
+	fmt.Fprintf(&b, "最近 %d 分钟内正文抓取失败率为 %.1f%%，已超过告警阈值 %.1f%%。\n\n", ev.WindowSec/60, ev.FailRate, ev.Threshold)
+	b.WriteString("可能原因：\n")
+	b.WriteString("  - 微信读书网页端接口风控\n")
+	b.WriteString("  - 微信公众号公开页面反爬\n")
+	b.WriteString("  - 所有微信读书账号凭证失效\n\n")
+	b.WriteString("建议检查：\n")
+	b.WriteString("  1. 微信读书账号状态\n")
+	b.WriteString("  2. 服务器网络环境\n")
+	b.WriteString("  3. CONTENT_FETCH_MODE 是否设为 summary 以暂停正文抓取\n\n")
+	b.WriteString("（本邮件由自部署的 WeChatRead-RSS 自动发送，无需回复。）\n")
+	return b.String()
+}
+
 func buildAllDeadBody(ev AccountsDeadEvent) string {
 	var b strings.Builder
 	b.WriteString("你好 ")

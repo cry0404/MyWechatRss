@@ -75,7 +75,7 @@ func main() {
 
 	accSvc := accounts.NewService(st, up, cfg.DefaultDeviceName)
 	subSvc := subs.NewService(st, caller)
-	artSvc := articles.NewService(st, caller)
+	artSvc := articles.NewService(st, caller, string(cfg.ContentFetchMode))
 
 	signer := auth.NewSigner(cfg.JWTSecret)
 	feedEnc := rss.NewFeedIDEncoder(cfg.FeedIDSalt)
@@ -117,6 +117,9 @@ func main() {
 
 	scheduler := articles.NewScheduler(st, artSvc)
 	go scheduler.Run(ctx)
+
+	alerter := articles.NewAlerter(st, notifier)
+	go alerter.Run(ctx)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,

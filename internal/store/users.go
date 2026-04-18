@@ -71,6 +71,27 @@ func (s *Store) HasAnyUser(ctx context.Context) (bool, error) {
 	return n > 0, nil
 }
 
+func (s *Store) ListAdminUsers(ctx context.Context) ([]*model.User, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, username, email, password_hash, created_at, is_admin
+		FROM users WHERE is_admin = 1
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*model.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
 func scanUser(row rowScanner) (*model.User, error) {
 	u := &model.User{}
 	var isAdmin int

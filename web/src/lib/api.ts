@@ -100,6 +100,12 @@ export const api = {
     request<SiteConfig>("GET", "/api/config"),
   updateConfig: (data: Partial<SiteConfig>) =>
     request<{ ok: boolean }>("PUT", "/api/config", data),
+
+  // Fetch logs / stats
+  getFetchLogs: (reviewId?: string, offset?: number) =>
+    request<FetchLog[]>("GET", `/api/fetch-logs?limit=50&offset=${offset || 0}${reviewId ? `&review_id=${encodeURIComponent(reviewId)}` : ""}`),
+  getFetchStats: (since?: number, until?: number, windowSec?: number) =>
+    request<FetchStatsResponse>("GET", `/api/fetch-stats?since=${since || ""}&until=${until || ""}&window_sec=${windowSec || 1800}`),
 };
 
 // Types matching architecture.md
@@ -185,4 +191,32 @@ export interface Article {
   fetched_at: number;
   read_num: number;
   like_num: number;
+}
+
+export interface FetchLog {
+  id: number;
+  review_id: string;
+  book_id: string;
+  chain: string;
+  success: boolean;
+  cost_ms: number;
+  error?: string;
+  created_at: number;
+}
+
+export interface ChainStat {
+  chain: string;
+  total: number;
+  success: number;
+  fail: number;
+  success_pct: number;
+  avg_cost_ms: number;
+}
+
+export interface FetchStatsResponse {
+  stats: ChainStat[];
+  fail_rate: number;
+  window_sec: number;
+  since: number;
+  until: number;
 }

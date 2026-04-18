@@ -8,6 +8,7 @@ import AccountsPage from "@/pages/AccountsPage";
 import SubscriptionsPage from "@/pages/SubscriptionsPage";
 import SubscriptionDetailPage from "@/pages/SubscriptionDetailPage";
 import RSSFeedsPage from "@/pages/RSSFeedsPage";
+import LogsPage from "@/pages/LogsPage";
 import SettingsPage from "@/pages/SettingsPage";
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="subscriptions/:id" element={<SubscriptionDetailPage />} />
         <Route path="accounts" element={<AccountsPage />} />
         <Route path="feeds" element={<RSSFeedsPage />} />
+        <Route path="logs" element={<LogsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>

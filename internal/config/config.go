@@ -8,6 +8,13 @@ import (
 	"strings"
 )
 
+type FetchMode string
+
+const (
+	FetchModeSummary FetchMode = "summary"
+	FetchModeFull    FetchMode = "full"
+)
+
 type Config struct {
 	ListenAddr string
 
@@ -17,8 +24,8 @@ type Config struct {
 
 	JWTSecret string
 
-	UpstreamBaseURL  string
-	UpstreamAPIKeyID string
+	UpstreamBaseURL   string
+	UpstreamAPIKeyID  string
 	UpstreamAPISecret string
 
 	PublicBaseURL string
@@ -32,6 +39,8 @@ type Config struct {
 	BootstrapEmail    string
 
 	DefaultDeviceName string
+
+	ContentFetchMode FetchMode
 
 	SMTPHost     string
 	SMTPPort     int
@@ -58,6 +67,7 @@ func Load() (*Config, error) {
 		FeedIDSalt:        getEnv("FEED_ID_SALT", "wechatread-rss"),
 		AllowRegister:     getEnvBool("ALLOW_REGISTER", false),
 		DefaultDeviceName: getEnv("DEFAULT_DEVICE_NAME", "wechatread-rss"),
+		ContentFetchMode:  parseFetchMode(getEnv("CONTENT_FETCH_MODE", "full")),
 		BootstrapUsername: getEnv("BOOTSTRAP_USERNAME", "admin"),
 		BootstrapPassword: getEnv("BOOTSTRAP_PASSWORD", "changeme"),
 		BootstrapEmail:    getEnv("BOOTSTRAP_EMAIL", "admin@local.invalid"),
@@ -124,4 +134,13 @@ func getEnvBool(k string, def bool) bool {
 		return def
 	}
 	return b
+}
+
+func parseFetchMode(v string) FetchMode {
+	switch strings.ToLower(v) {
+	case "summary":
+		return FetchModeSummary
+	default:
+		return FetchModeFull
+	}
 }

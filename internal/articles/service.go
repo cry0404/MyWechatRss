@@ -1,16 +1,21 @@
 package articles
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
+	"net/http/cookiejar"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/cry0404/MyWechatRss/internal/accounts"
 	"github.com/cry0404/MyWechatRss/internal/model"
 	"github.com/cry0404/MyWechatRss/internal/store"
@@ -19,17 +24,18 @@ import (
 type Service struct {
 	Store  *store.Store
 	Caller *accounts.Caller
+	Mode   string
 }
 
-func NewService(st *store.Store, cr *accounts.Caller) *Service {
-	return &Service{Store: st, Caller: cr}
+func NewService(st *store.Store, cr *accounts.Caller, mode string) *Service {
+	return &Service{Store: st, Caller: cr, Mode: mode}
 }
 
 var (
-	firstFetchSleepMin = 2 * time.Second
-	firstFetchSleepMax = 5 * time.Second
-	incrFetchSleepMin = 7 * time.Second
-	incrFetchSleepMax = 8 * time.Second
+	firstFetchSleepMin = 5 * time.Second
+	firstFetchSleepMax = 12 * time.Second
+	incrFetchSleepMin = 15 * time.Second
+	incrFetchSleepMax = 25 * time.Second
 	firstFetchMax = 30
 	incrFetchPage = 20
 )
@@ -118,7 +124,7 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 			newCount++
 		}
 
-		if err := s.fetchAndStoreContent(ctx, userID, preferID, r.ReviewID, r.URL); err != nil {
+		if err := s.fetchAndStoreContent(ctx, userID, preferID, sub.BookID, r.ReviewID, r.URL); err != nil {
 			log.Printf("fetch sub %d: content %s: %v", sub.ID, r.ReviewID, err)
 		}
 	}
@@ -201,50 +207,219 @@ func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID i
 	return items, nil
 }
 
-func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccountID int64, reviewID, mpURL string) error {
-	if mpURL != "" {
-		if html, err := fetchMpContent(ctx, mpURL); err == nil {
-			return s.Store.UpdateArticleContent(ctx, reviewID, html)
-		} else {
-			log.Printf("fetch mp %s: %v（回退 shareChapter）", reviewID, err)
-		}
+func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccountID int64, bookID, reviewID, mpURL string) error {
+	if s.Mode == "summary" {
+		return nil
 	}
 
-	return s.fetchContentViaShareChapter(ctx, userID, preferAccountID, reviewID)
+	var lastErr error
+	var html string
+
+	html, lastErr = s.tryChain(ctx, bookID, reviewID, "web", func() (string, error) {
+		return s.fetchContentViaWebContent(ctx, userID, reviewID)
+	})
+	if lastErr == nil {
+		return s.Store.UpdateArticleContent(ctx, reviewID, html)
+	}
+	log.Printf("fetch content %s: web failed: %v", reviewID, lastErr)
+
+	if mpURL != "" {
+		html, lastErr = s.tryChain(ctx, bookID, reviewID, "mp", func() (string, error) {
+			return fetchMpContent(ctx, mpURL)
+		})
+		if lastErr == nil {
+			return s.Store.UpdateArticleContent(ctx, reviewID, html)
+		}
+		log.Printf("fetch content %s: mp failed: %v", reviewID, lastErr)
+	}
+
+	lastErr = s.fetchContentViaShareChapterWithLog(ctx, userID, preferAccountID, bookID, reviewID)
+	if lastErr != nil {
+		log.Printf("fetch content %s: all chains failed", reviewID)
+	}
+	return lastErr
+}
+
+func (s *Service) tryChain(ctx context.Context, bookID, reviewID, chain string, fn func() (string, error)) (string, error) {
+	start := time.Now()
+	html, err := fn()
+	cost := time.Since(start).Milliseconds()
+	logRec := &model.ArticleFetchLog{
+		ReviewID: reviewID,
+		BookID:   bookID,
+		Chain:    chain,
+		Success:  err == nil,
+		CostMs:   cost,
+	}
+	if err != nil {
+		logRec.Error = err.Error()
+	}
+	if logErr := s.Store.RecordArticleFetchLog(ctx, logRec); logErr != nil {
+		log.Printf("record fetch log %s/%s: %v", reviewID, chain, logErr)
+	}
+	return html, err
+}
+
+func (s *Service) fetchContentViaShareChapterWithLog(ctx context.Context, userID, preferAccountID int64, bookID, reviewID string) error {
+	start := time.Now()
+	err := s.fetchContentViaShareChapter(ctx, userID, preferAccountID, reviewID)
+	cost := time.Since(start).Milliseconds()
+	logRec := &model.ArticleFetchLog{
+		ReviewID: reviewID,
+		BookID:   bookID,
+		Chain:    "shareChapter",
+		Success:  err == nil,
+		CostMs:   cost,
+	}
+	if err != nil {
+		logRec.Error = err.Error()
+	}
+	if logErr := s.Store.RecordArticleFetchLog(ctx, logRec); logErr != nil {
+		log.Printf("record fetch log %s/shareChapter: %v", reviewID, logErr)
+	}
+	return err
+}
+
+// webContentClient 用于访问 weread 网页端接口（weread.qq.com/web/*）。
+// 与 mpClient 不同：这里需要 Cookie jar 维持 wr_vid / wr_skey 会话。
+var webContentClient = &http.Client{
+	Timeout: 20 * time.Second,
+	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	},
+}
+
+func init() {
+	// 给网页端 client 挂上 cookie jar，这样首次设置 wr_vid/wr_skey 后
+	// 后续请求会自动携带（虽然实际上每次请求都是独立的，但保留扩展性）。
+	jar, err := cookiejar.New(nil)
+	if err == nil {
+		webContentClient.Jar = jar
+	}
+}
+
+// fetchContentViaWebContent 通过 weread 网页端 /web/mp/content 获取公众号正文。
+func (s *Service) fetchContentViaWebContent(ctx context.Context, userID int64, reviewID string) (string, error) {
+	acc, err := s.Store.PickActiveAccount(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("pick account: %w", err)
+	}
+
+	url := "https://weread.qq.com/web/mp/content?reviewId=" + reviewID
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+
+	// 网页端用桌面浏览器 UA（不是 iOS App UA）
+	req.Header.Set("User-Agent", mpDesktopUA)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+	req.Header.Set("Referer", "https://weread.qq.com/web/reader/")
+	cookieVal := fmt.Sprintf("wr_vid=%d; wr_skey=%s", acc.VID, acc.SKey)
+	req.Header.Set("Cookie", cookieVal)
+
+	resp, err := webContentClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("web content request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("web content http %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, mpMaxBodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("web content read body: %w", err)
+	}
+
+	// 网页端 /web/mp/content 返回的是微信公众号文章页的完整 HTML（约 3MB），
+	// 不是 JSON。需要用 goquery 提取 #js_content 节点，和 mpfetch.go 一样。
+	// 先检查是不是验证页。
+	if bytes.Contains(body, mpVerifyMarker) {
+		return "", errors.New("web content 返回环境验证页，疑似风控")
+	}
+
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("web content parse html: %w", err)
+	}
+
+	content := doc.Find("#js_content").First()
+	if content.Length() == 0 {
+		return "", errors.New("web content 正文节点 #js_content 不存在")
+	}
+
+	sanitizeMpContent(content)
+
+	html, err := content.Html()
+	if err != nil {
+		return "", fmt.Errorf("web content extract html: %w", err)
+	}
+	html = strings.TrimSpace(html)
+	if html == "" {
+		return "", errors.New("web content 正文为空")
+	}
+	return html, nil
 }
 
 func (s *Service) fetchContentViaShareChapter(ctx context.Context, userID, preferAccountID int64, reviewID string) error {
-	res, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
-		Method:          http.MethodGet,
-		Path:            "/book/shareChapter",
-		Query:           map[string]string{"cmd": "get", "reviewId": reviewID},
-		PreferAccountID: preferAccountID,
-	})
-	if err != nil {
-		return err
+	// 尝试多种参数组合，因为 shareChapter 协议可能已变
+	attempts := []struct {
+		name  string
+		query map[string]string
+	}{
+		{"original", map[string]string{"cmd": "get", "reviewId": reviewID}},
+		{"with_version", map[string]string{"cmd": "get", "reviewId": reviewID, "version": "2"}},
+		{"with_synckey", map[string]string{"cmd": "get", "reviewId": reviewID, "synckey": "0"}},
+		{"with_both", map[string]string{"cmd": "get", "reviewId": reviewID, "version": "2", "synckey": "0"}},
 	}
-	var raw struct {
-		Data map[string]interface{} `json:"data"`
-	}
-	if err := json.Unmarshal(res.RawJSON, &raw); err != nil {
-		return fmt.Errorf("parse /book/shareChapter: %w", err)
-	}
-	dumpShareChapterOnce(raw)
 
-	content := asString(raw.Data["content"])
-	if content == "" {
-		return errors.New("shareChapter 响应无正文")
-	}
-	if err := s.Store.UpdateArticleContent(ctx, reviewID, content); err != nil {
-		return err
-	}
-	for _, k := range []string{"url", "mpUrl", "shareUrl", "wxUrl", "link"} {
-		if u := asString(raw.Data[k]); u != "" {
-			_ = s.Store.UpdateArticleURL(ctx, reviewID, u)
-			break
+	var lastErr error
+	for _, att := range attempts {
+		res, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
+			Method:          http.MethodGet,
+			Path:            "/book/shareChapter",
+			Query:           att.query,
+			PreferAccountID: preferAccountID,
+		})
+		if err != nil {
+			lastErr = fmt.Errorf("shareChapter %s: %w", att.name, err)
+			continue
 		}
+
+		var raw struct {
+			Data map[string]interface{} `json:"data"`
+		}
+		if err := json.Unmarshal(res.RawJSON, &raw); err != nil {
+			lastErr = fmt.Errorf("shareChapter %s parse: %w", att.name, err)
+			continue
+		}
+
+		content := asString(raw.Data["content"])
+		if content != "" {
+			if err := s.Store.UpdateArticleContent(ctx, reviewID, content); err != nil {
+				return err
+			}
+			for _, k := range []string{"url", "mpUrl", "shareUrl", "wxUrl", "link"} {
+				if u := asString(raw.Data[k]); u != "" {
+					_ = s.Store.UpdateArticleURL(ctx, reviewID, u)
+					break
+				}
+			}
+			return nil
+		}
+		lastErr = fmt.Errorf("shareChapter %s: 响应无正文", att.name)
 	}
-	return nil
+
+	if lastErr != nil {
+		return lastErr
+	}
+	return errors.New("shareChapter 所有参数组合均失败")
 }
 
 func (s *Service) EnsureContent(ctx context.Context, userID int64, reviewID string) (*model.Article, error) {
@@ -255,7 +430,7 @@ func (s *Service) EnsureContent(ctx context.Context, userID int64, reviewID stri
 	if a.ContentHTML != "" {
 		return a, nil
 	}
-	if err := s.fetchAndStoreContent(ctx, userID, 0, reviewID, a.URL); err != nil {
+	if err := s.fetchAndStoreContent(ctx, userID, 0, a.BookID, reviewID, a.URL); err != nil {
 		return a, err
 	}
 	return s.Store.GetArticleByReviewID(ctx, reviewID)
@@ -264,7 +439,6 @@ func (s *Service) EnsureContent(ctx context.Context, userID int64, reviewID stri
 func (s *Service) ListByBook(ctx context.Context, bookID string, limit, offset int) ([]*model.Article, error) {
 	return s.Store.ListArticlesByBook(ctx, bookID, limit, offset)
 }
-
 
 func jitterSleep(ctx context.Context, min, max time.Duration) {
 	if max <= min {
@@ -334,16 +508,3 @@ func dumpMpInfoOnce(reviewID string, createTime int64, mpInfo map[string]interfa
 	log.Printf("[dump once] /book/articles first review (coverBoxInfo stripped):\n%s", string(b))
 }
 
-var dumpShareChapterDone = false
-
-func dumpShareChapterOnce(raw interface{}) {
-	if dumpShareChapterDone {
-		return
-	}
-	dumpShareChapterDone = true
-	b, _ := json.MarshalIndent(raw, "", "  ")
-	if len(b) > 8000 {
-		b = b[:8000]
-	}
-	log.Printf("[dump once] /book/shareChapter raw:\n%s", string(b))
-}
