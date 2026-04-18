@@ -1,5 +1,7 @@
 # WeChatRead RSS 客户端
 
+<img width="1797" height="1003" alt="图片" src="https://github.com/user-attachments/assets/bf4cdba1-6556-497d-9629-1dab12281245" />
+
 自托管的微信读书公众号 RSS：部署在你自己的机器上，连接上游服务后即可在浏览器里管理账号与订阅，阅读器通过 RSS 链接收文章。
 
 > 初始默认密码为 admin: changeme ， 请进入后及时更改，或尽量使用内网访问客户端
