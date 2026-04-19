@@ -35,26 +35,26 @@ export default function DashboardPage() {
     queryFn: api.getAccounts,
   });
 
-  const { data: recentArticles = [] } = useQuery({
-    queryKey: ["dashboard-recent-articles", subscriptions.map((s) => s.id)],
-    enabled: subscriptions.length > 0,
-    queryFn: async () => {
-      const lists = await Promise.all(
-        subscriptions.map(async (sub) => {
-          try {
-            const arts = await api.getArticles(sub.id, 0);
-            return arts.slice(0, 5).map((a) => ({ ...a, mp_name: sub.mp_name || sub.alias }));
-          } catch {
-            return [];
-          }
-        })
-      );
-      return lists
-        .flat()
-        .sort((a, b) => b.publish_at - a.publish_at)
-        .slice(0, 5);
-    },
+  const { data: globalArticles = [] } = useQuery({
+    queryKey: ["global-articles", 0],
+    queryFn: () => api.getGlobalArticles(10, 0),
+    staleTime: 60_000,
   });
+
+  const subMap = useMemo(() => {
+    const map = new Map<string, string>();
+    subscriptions.forEach((s) => {
+      map.set(s.book_id, s.alias || s.mp_name || "");
+    });
+    return map;
+  }, [subscriptions]);
+
+  const recentArticles = useMemo(() => {
+    return globalArticles.slice(0, 5).map((a) => ({
+      ...a,
+      mp_name: subMap.get(a.book_id) || "",
+    }));
+  }, [globalArticles, subMap]);
 
   const nowSec = Math.floor(Date.now() / 1000);
   const todayArticleCount = recentArticles.filter((a) => nowSec - a.publish_at <= ONE_DAY_SEC).length;

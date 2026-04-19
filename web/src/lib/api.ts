@@ -95,6 +95,10 @@ export const api = {
   refreshSubscription: (id: number) =>
     request<{ new_count: number }>("POST", `/api/subscriptions/${id}/refresh`),
 
+  // Global articles (all subscriptions merged, paginated)
+  getGlobalArticles: (limit?: number, offset?: number) =>
+    request<Article[]>("GET", `/api/articles?limit=${limit || 20}&offset=${offset || 0}`),
+
   // Site config (SMTP)
   getConfig: () =>
     request<SiteConfig>("GET", "/api/config"),

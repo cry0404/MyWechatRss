@@ -26,7 +26,12 @@ const manageNavItems = [
   { path: "/settings", label: "设置", icon: Settings },
 ];
 
-export function Sidebar() {
+interface SidebarProps {
+  mobileOpen?: boolean;
+  onClose?: () => void;
+}
+
+export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const location = useLocation();
   const logout = useLogout();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -41,12 +46,9 @@ export function Sidebar() {
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(path + "/");
 
-  return (
-    <aside
-      className="fixed left-0 top-0 z-10 flex h-screen w-56 flex-col border-r-2"
-      style={{ backgroundColor: "var(--color-bg-sidebar)", borderColor: "var(--color-border)" }}
-    >
-      <div className="px-4 py-5 flex items-center gap-3 border-b-2" style={{ borderColor: "var(--color-border)" }}>
+  const navContent = (
+    <>
+      <div className="px-4 py-5 flex items-center gap-3 border-b-2 md:border-b-2" style={{ borderColor: "var(--color-border)" }}>
         <span className="font-heading text-lg leading-tight truncate" style={{ color: "var(--color-ink)" }}>
           WeChatRead RSS
         </span>
@@ -58,7 +60,12 @@ export function Sidebar() {
             const active = isActive(item.path);
             const Icon = item.icon;
             return (
-              <Link key={item.path} to={item.path} className={cn("sidebar-link", active && "active")}>
+              <Link
+                key={item.path}
+                to={item.path}
+                onClick={onClose}
+                className={cn("sidebar-link", active && "active")}
+              >
                 <Icon className="h-4 w-4 shrink-0 opacity-90" strokeWidth={2.25} />
                 <span className="flex-1">{item.label}</span>
                 {item.path === "/subscriptions" && subCount > 0 && (
@@ -86,7 +93,12 @@ export function Sidebar() {
               const active = isActive(item.path);
               const Icon = item.icon;
               return (
-                <Link key={item.path} to={item.path} className={cn("sidebar-link", active && "active")}>
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  onClick={onClose}
+                  className={cn("sidebar-link", active && "active")}
+                >
                   <Icon className="h-4 w-4 shrink-0 opacity-90" strokeWidth={2.25} />
                   <span>{item.label}</span>
                 </Link>
@@ -100,7 +112,10 @@ export function Sidebar() {
         <div className="px-3 py-3 border-t" style={{ borderColor: "var(--color-border)" }}>
           <button
             type="button"
-            onClick={logout}
+            onClick={() => {
+              logout();
+              onClose?.();
+            }}
             className="sidebar-link w-full border-0 !justify-start"
             style={{ color: "var(--color-ink-muted)" }}
             onMouseEnter={(e) => {
@@ -115,6 +130,29 @@ export function Sidebar() {
           </button>
         </div>
       )}
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Desktop sidebar */}
+      <aside
+        className="fixed left-0 top-0 z-40 hidden md:flex h-screen w-56 flex-col border-r-2"
+        style={{ backgroundColor: "var(--color-bg-sidebar)", borderColor: "var(--color-border)" }}
+      >
+        {navContent}
+      </aside>
+
+      {/* Mobile drawer */}
+      <aside
+        className={cn(
+          "fixed left-0 top-0 z-40 flex h-screen w-56 flex-col border-r-2 transition-transform duration-200 ease-out md:hidden",
+          mobileOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+        style={{ backgroundColor: "var(--color-bg-sidebar)", borderColor: "var(--color-border)" }}
+      >
+        {navContent}
+      </aside>
+    </>
   );
 }

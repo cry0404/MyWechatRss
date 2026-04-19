@@ -124,7 +124,7 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 			newCount++
 		}
 
-		if err := s.fetchAndStoreContent(ctx, userID, preferID, r.ReviewID, r.URL); err != nil {
+		if err := s.fetchAndStoreContent(ctx, userID, preferID, sub.BookID, r.ReviewID, r.URL); err != nil {
 			log.Printf("fetch sub %d: content %s: %v", sub.ID, r.ReviewID, err)
 		}
 	}
@@ -207,7 +207,7 @@ func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID i
 	return items, nil
 }
 
-func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccountID int64, reviewID, mpURL string) error {
+func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccountID int64, bookID, reviewID, mpURL string) error {
 	if s.Mode == "summary" {
 		return nil
 	}
@@ -215,25 +215,69 @@ func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccoun
 	var lastErr error
 	var html string
 
-	html, lastErr = s.fetchContentViaWebContent(ctx, userID, reviewID)
+	html, lastErr = s.tryChain(ctx, bookID, reviewID, "web", func() (string, error) {
+		return s.fetchContentViaWebContent(ctx, userID, reviewID)
+	})
 	if lastErr == nil {
 		return s.Store.UpdateArticleContent(ctx, reviewID, html)
 	}
 	log.Printf("fetch content %s: web failed: %v", reviewID, lastErr)
 
 	if mpURL != "" {
-		html, lastErr = fetchMpContent(ctx, mpURL)
+		html, lastErr = s.tryChain(ctx, bookID, reviewID, "mp", func() (string, error) {
+			return fetchMpContent(ctx, mpURL)
+		})
 		if lastErr == nil {
 			return s.Store.UpdateArticleContent(ctx, reviewID, html)
 		}
 		log.Printf("fetch content %s: mp failed: %v", reviewID, lastErr)
 	}
 
-	lastErr = s.fetchContentViaShareChapter(ctx, userID, preferAccountID, reviewID)
+	lastErr = s.fetchContentViaShareChapterWithLog(ctx, userID, preferAccountID, bookID, reviewID)
 	if lastErr != nil {
 		log.Printf("fetch content %s: all chains failed", reviewID)
 	}
 	return lastErr
+}
+
+func (s *Service) tryChain(ctx context.Context, bookID, reviewID, chain string, fn func() (string, error)) (string, error) {
+	start := time.Now()
+	html, err := fn()
+	cost := time.Since(start).Milliseconds()
+	logRec := &model.ArticleFetchLog{
+		ReviewID: reviewID,
+		BookID:   bookID,
+		Chain:    chain,
+		Success:  err == nil,
+		CostMs:   cost,
+	}
+	if err != nil {
+		logRec.Error = err.Error()
+	}
+	if logErr := s.Store.RecordArticleFetchLog(ctx, logRec); logErr != nil {
+		log.Printf("record fetch log %s/%s: %v", reviewID, chain, logErr)
+	}
+	return html, err
+}
+
+func (s *Service) fetchContentViaShareChapterWithLog(ctx context.Context, userID, preferAccountID int64, bookID, reviewID string) error {
+	start := time.Now()
+	err := s.fetchContentViaShareChapter(ctx, userID, preferAccountID, reviewID)
+	cost := time.Since(start).Milliseconds()
+	logRec := &model.ArticleFetchLog{
+		ReviewID: reviewID,
+		BookID:   bookID,
+		Chain:    "shareChapter",
+		Success:  err == nil,
+		CostMs:   cost,
+	}
+	if err != nil {
+		logRec.Error = err.Error()
+	}
+	if logErr := s.Store.RecordArticleFetchLog(ctx, logRec); logErr != nil {
+		log.Printf("record fetch log %s/shareChapter: %v", reviewID, logErr)
+	}
+	return err
 }
 
 // webContentClient 用于访问 weread 网页端接口（weread.qq.com/web/*）。
@@ -304,9 +348,16 @@ func (s *Service) fetchContentViaWebContent(ctx context.Context, userID int64, r
 		return "", fmt.Errorf("web content parse html: %w", err)
 	}
 
+	// 调试：如果找不到正文，把页面 title 和前几行 dump 出来
 	content := doc.Find("#js_content").First()
 	if content.Length() == 0 {
-		return "", errors.New("web content 正文节点 #js_content 不存在")
+		title := strings.TrimSpace(doc.Find("title").First().Text())
+		preview := string(body)
+		if len(preview) > 600 {
+			preview = preview[:600]
+		}
+		log.Printf("web content debug reviewId=%s title=%q preview=%q", reviewID, title, preview)
+		return "", fmt.Errorf("web content 正文节点 #js_content 不存在 (title=%s)", title)
 	}
 
 	sanitizeMpContent(content)
@@ -368,6 +419,7 @@ func (s *Service) fetchContentViaShareChapter(ctx context.Context, userID, prefe
 			}
 			return nil
 		}
+		log.Printf("shareChapter debug reviewId=%s variant=%s raw=%s", reviewID, att.name, string(res.RawJSON))
 		lastErr = fmt.Errorf("shareChapter %s: 响应无正文", att.name)
 	}
 
@@ -385,7 +437,7 @@ func (s *Service) EnsureContent(ctx context.Context, userID int64, reviewID stri
 	if a.ContentHTML != "" {
 		return a, nil
 	}
-	if err := s.fetchAndStoreContent(ctx, userID, 0, reviewID, a.URL); err != nil {
+	if err := s.fetchAndStoreContent(ctx, userID, 0, a.BookID, reviewID, a.URL); err != nil {
 		return a, err
 	}
 	return s.Store.GetArticleByReviewID(ctx, reviewID)
@@ -393,6 +445,10 @@ func (s *Service) EnsureContent(ctx context.Context, userID int64, reviewID stri
 
 func (s *Service) ListByBook(ctx context.Context, bookID string, limit, offset int) ([]*model.Article, error) {
 	return s.Store.ListArticlesByBook(ctx, bookID, limit, offset)
+}
+
+func (s *Service) ListByUser(ctx context.Context, userID int64, limit, offset int) ([]*model.Article, error) {
+	return s.Store.ListArticlesByUser(ctx, userID, limit, offset)
 }
 
 func jitterSleep(ctx context.Context, min, max time.Duration) {
