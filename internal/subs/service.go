@@ -81,6 +81,8 @@ func (n searchBookNode) pick() searchBookEntry {
 
 func parseSearchResults(raw []byte) ([]SearchResultItem, error) {
 	var envelope struct {
+		ErrCode int              `json:"errcode"`
+		ErrMsg  string           `json:"errmsg"`
 		Books   []searchBookNode `json:"books"`
 		Results []struct {
 			Type  int              `json:"type"`
@@ -89,6 +91,9 @@ func parseSearchResults(raw []byte) ([]SearchResultItem, error) {
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return nil, err
+	}
+	if envelope.ErrCode != 0 {
+		return nil, fmt.Errorf("weread search errcode=%d errmsg=%s", envelope.ErrCode, envelope.ErrMsg)
 	}
 
 	seen := map[string]struct{}{}
