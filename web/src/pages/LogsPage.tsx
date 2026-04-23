@@ -1,7 +1,17 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { Activity, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
+import {
+  Activity,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  AlertTriangle,
+  Filter,
+  Copy,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 
 function formatTime(ts: number) {
   return new Date(ts * 1000).toLocaleString("zh-CN");
@@ -12,8 +22,12 @@ function formatDuration(ms: number) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+type FilterMode = "all" | "fail" | "success";
+
 export default function LogsPage() {
   const [offset, setOffset] = useState(0);
+  const [filter, setFilter] = useState<FilterMode>("all");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const now = Math.floor(Date.now() / 1000);
   const since = now - 24 * 3600;
 
@@ -32,6 +46,13 @@ export default function LogsPage() {
   const failRate = statsData?.fail_rate ?? 0;
   const logs = logsData ?? [];
 
+  const filteredLogs =
+    filter === "all"
+      ? logs
+      : filter === "fail"
+      ? logs.filter((l) => !l.success)
+      : logs.filter((l) => l.success);
+
   const totalAttempts = stats.reduce((sum, s) => sum + s.total, 0);
   const totalSuccess = stats.reduce((sum, s) => sum + s.success, 0);
   const overallPct = totalAttempts > 0 ? (totalSuccess / totalAttempts) * 100 : 0;
@@ -41,6 +62,9 @@ export default function LogsPage() {
     mp: "公众号公开页",
     shareChapter: "App 接口",
   };
+
+  const failCount = logs.filter((l) => !l.success).length;
+  const successCount = logs.filter((l) => l.success).length;
 
   return (
     <div className="page-enter max-w-5xl mx-auto">
@@ -154,10 +178,39 @@ export default function LogsPage() {
 
       {/* Logs table */}
       <section>
-        <h2 className="text-xl font-heading mb-4">最近记录</h2>
-        {logs.length === 0 ? (
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-heading">最近记录</h2>
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4" style={{ color: "var(--color-ink-muted)" }} />
+            {([
+              { key: "all", label: `全部 (${logs.length})` },
+              { key: "fail", label: `失败 (${failCount})` },
+              { key: "success", label: `成功 (${successCount})` },
+            ] as { key: FilterMode; label: string }[]).map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => {
+                  setFilter(f.key);
+                  setOffset(0);
+                }}
+                className="text-xs px-2.5 py-1 rounded-md border transition-colors"
+                style={{
+                  borderColor: "var(--color-border)",
+                  backgroundColor:
+                    filter === f.key ? "var(--color-bg-hover)" : "transparent",
+                  color: filter === f.key ? "var(--color-ink)" : "var(--color-ink-muted)",
+                }}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {filteredLogs.length === 0 ? (
           <p className="text-sm" style={{ color: "var(--color-ink-muted)" }}>
-            暂无抓取记录
+            {filter === "all" ? "暂无抓取记录" : filter === "fail" ? "暂无失败记录" : "暂无成功记录"}
           </p>
         ) : (
           <>
@@ -172,41 +225,80 @@ export default function LogsPage() {
                     <th className="px-4 py-2 font-medium">链路</th>
                     <th className="px-4 py-2 font-medium">结果</th>
                     <th className="px-4 py-2 font-medium">耗时</th>
-                    <th className="px-4 py-2 font-medium">错误信息</th>
+                    <th className="px-4 py-2 font-medium">Review ID</th>
+                    <th className="px-4 py-2 font-medium w-10"></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {logs.map((log) => (
-                    <tr
-                      key={log.id}
-                      className="border-t"
-                      style={{ borderColor: "var(--color-border)" }}
-                    >
-                      <td className="px-4 py-2 whitespace-nowrap">{formatTime(log.created_at)}</td>
-                      <td className="px-4 py-2">{chainLabel[log.chain] || log.chain}</td>
-                      <td className="px-4 py-2">
-                        {log.success ? (
-                          <span className="inline-flex items-center gap-1" style={{ color: "var(--color-success, #22c55e)" }}>
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            成功
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1" style={{ color: "var(--color-danger)" }}>
-                            <XCircle className="h-3.5 w-3.5" />
-                            失败
-                          </span>
+                  {filteredLogs.map((log) => {
+                    const isExpanded = expandedId === log.id;
+                    return (
+                      <>
+                        <tr
+                          key={log.id}
+                          className="border-t cursor-pointer hover:opacity-80"
+                          style={{ borderColor: "var(--color-border)" }}
+                          onClick={() => setExpandedId(isExpanded ? null : log.id)}
+                        >
+                          <td className="px-4 py-2 whitespace-nowrap">{formatTime(log.created_at)}</td>
+                          <td className="px-4 py-2">{chainLabel[log.chain] || log.chain}</td>
+                          <td className="px-4 py-2">
+                            {log.success ? (
+                              <span className="inline-flex items-center gap-1" style={{ color: "var(--color-success, #22c55e)" }}>
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                成功
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1" style={{ color: "var(--color-danger)" }}>
+                                <XCircle className="h-3.5 w-3.5" />
+                                失败
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2">{formatDuration(log.cost_ms)}</td>
+                          <td className="px-4 py-2">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-xs font-mono hover:underline"
+                              style={{ color: "var(--color-ink-muted)" }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigator.clipboard.writeText(log.review_id);
+                              }}
+                              title="点击复制"
+                            >
+                              {log.review_id.slice(0, 12)}…
+                              <Copy className="h-3 w-3" />
+                            </button>
+                          </td>
+                          <td className="px-4 py-2">
+                            {log.error ? (
+                              isExpanded ? (
+                                <ChevronUp className="h-4 w-4" style={{ color: "var(--color-ink-muted)" }} />
+                              ) : (
+                                <ChevronDown className="h-4 w-4" style={{ color: "var(--color-ink-muted)" }} />
+                              )
+                            ) : null}
+                          </td>
+                        </tr>
+                        {isExpanded && log.error && (
+                          <tr style={{ backgroundColor: "var(--color-bg-muted)" }}>
+                            <td colSpan={6} className="px-4 py-3">
+                              <div className="text-xs font-medium mb-1" style={{ color: "var(--color-danger)" }}>
+                                错误信息
+                              </div>
+                              <pre
+                                className="text-xs font-mono whitespace-pre-wrap break-all"
+                                style={{ color: "var(--color-ink-muted)" }}
+                              >
+                                {log.error}
+                              </pre>
+                            </td>
+                          </tr>
                         )}
-                      </td>
-                      <td className="px-4 py-2">{formatDuration(log.cost_ms)}</td>
-                      <td
-                        className="px-4 py-2 max-w-xs truncate"
-                        title={log.error || ""}
-                        style={{ color: "var(--color-ink-muted)" }}
-                      >
-                        {log.error || "—"}
-                      </td>
-                    </tr>
-                  ))}
+                      </>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -21,6 +21,8 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
   return !isAuthenticated ? children : <Navigate to="/" replace />;
 }
 
+const logsEnabled = import.meta.env.VITE_ENABLE_LOGS === "true" || import.meta.env.VITE_ENABLE_LOGS === "1";
+
 export default function App() {
   return (
     <>
@@ -47,7 +49,7 @@ export default function App() {
         <Route path="subscriptions/:id" element={<SubscriptionDetailPage />} />
         <Route path="accounts" element={<AccountsPage />} />
         <Route path="feeds" element={<RSSFeedsPage />} />
-        <Route path="logs" element={<LogsPage />} />
+        {logsEnabled && <Route path="logs" element={<LogsPage />} />}
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>

@@ -20,9 +20,11 @@ const mainNavItems = [
   { path: "/feeds", label: "文章流", icon: Rss },
 ];
 
+const logsEnabled = import.meta.env.VITE_ENABLE_LOGS === "true" || import.meta.env.VITE_ENABLE_LOGS === "1";
+
 const manageNavItems = [
   { path: "/accounts", label: "账号", icon: Users },
-  { path: "/logs", label: "日志", icon: Activity },
+  ...(logsEnabled ? [{ path: "/logs", label: "日志", icon: Activity }] : []),
   { path: "/settings", label: "设置", icon: Settings },
 ];
 
