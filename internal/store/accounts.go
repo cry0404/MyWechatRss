@@ -96,6 +96,12 @@ func (s *Store) ListAccountsByUser(ctx context.Context, userID int64) ([]*model.
 
 func (s *Store) PickActiveAccount(ctx context.Context, userID int64) (*model.WeReadAccount, error) {
 	now := time.Now().Unix()
+	// 把已过期的 cooldown 自动恢复为 active，避免状态与 cooldown_until 不一致。
+	_, _ = s.db.ExecContext(ctx, `
+        UPDATE weread_accounts
+        SET status = 'active', cooldown_until = 0, last_err = ''
+        WHERE user_id = ? AND status = 'cooldown' AND cooldown_until <= ?
+    `, userID, now)
 	row := s.db.QueryRowContext(ctx, `
         SELECT id, user_id, vid, skey_enc, refresh_token_enc, cookies_enc,
                nickname, avatar, status, cooldown_until, last_ok_at, last_err,
@@ -116,6 +122,12 @@ func (s *Store) PickActiveAccount(ctx context.Context, userID int64) (*model.WeR
 
 func (s *Store) GetActiveAccountByID(ctx context.Context, userID, id int64) (*model.WeReadAccount, error) {
 	now := time.Now().Unix()
+	// 把已过期的 cooldown 自动恢复为 active，避免状态与 cooldown_until 不一致。
+	_, _ = s.db.ExecContext(ctx, `
+        UPDATE weread_accounts
+        SET status = 'active', cooldown_until = 0, last_err = ''
+        WHERE user_id = ? AND id = ? AND status = 'cooldown' AND cooldown_until <= ?
+    `, userID, id, now)
 	row := s.db.QueryRowContext(ctx, `
         SELECT id, user_id, vid, skey_enc, refresh_token_enc, cookies_enc,
                nickname, avatar, status, cooldown_until, last_ok_at, last_err,
