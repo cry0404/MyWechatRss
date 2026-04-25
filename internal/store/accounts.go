@@ -186,6 +186,14 @@ func (s *Store) SetDeadHook(fn func(ctx context.Context, userID int64, lastErr s
 }
 
 func (s *Store) CountActiveAccounts(ctx context.Context, userID int64) (int, error) {
+	now := time.Now().Unix()
+	// 把已过期的 cooldown 自动恢复为 active，避免 scheduler 因 CountActiveAccounts=0
+	// 而跳过该用户所有订阅，导致 PickActiveAccount 永远不被调用、恢复逻辑永不被执行的死锁。
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE weread_accounts
+		SET status = 'active', cooldown_until = 0, last_err = ''
+		WHERE user_id = ? AND status = 'cooldown' AND cooldown_until <= ?
+	`, userID, now)
 	var n int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM weread_accounts WHERE user_id = ? AND status = 'active'`,

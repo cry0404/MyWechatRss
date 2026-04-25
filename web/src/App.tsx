@@ -21,7 +21,7 @@ function RequireGuest({ children }: { children: React.ReactNode }) {
   return !isAuthenticated ? children : <Navigate to="/" replace />;
 }
 
-const logsEnabled = import.meta.env.VITE_ENABLE_LOGS === "true" || import.meta.env.VITE_ENABLE_LOGS === "1";
+const logsEnabled = import.meta.env.VITE_ENABLE_LOGS !== "false" && import.meta.env.VITE_ENABLE_LOGS !== "0";
 
 export default function App() {
   return (

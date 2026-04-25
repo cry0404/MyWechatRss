@@ -76,7 +76,7 @@ CONTENT_FETCH_MODE=summary   # 或 full（不写则默认 full）
 | 换宿主机端口       | 在 `.env` 里增加 `HOST_PORT=9090`（或其它端口），再执行 `docker compose up -d`。 |
 | 允许任何人注册      | `.env` 中设置 `ALLOW_REGISTER=true`。                                |
 | 账号全部失效时邮件提醒  | 配置 `SMTP_HOST`、`SMTP_PORT` 等；用户需在个人资料里填写邮箱。                      |
-| 隐藏日志侧边栏（构建时） | 前端构建时传入 `VITE_ENABLE_LOGS=false`，日志入口和路由将被移除。                    |
+| 隐藏日志侧边栏（构建时） | 前端构建时传入 `VITE_ENABLE_LOGS=false`，日志入口和路由将被移除。（默认已开启）                    |
 
 
 ---

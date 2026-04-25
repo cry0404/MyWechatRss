@@ -25,14 +25,6 @@ const minRefreshInterval = 10 * time.Second
 
 const CooldownDuration = 30 * time.Minute
 
-// SearchRateLimitCooldown 是搜索接口专属风控 (-2041) 触发后的冷却时长。
-//
-// 取 5 分钟而不是 CooldownDuration(30 分钟) 的原因：
-//   - -2041 是"搜索维度"的软风控，恢复比 -2010 的"账号维度"可疑操作快得多；
-//   - 单账号场景下 30 分钟基本等于"服务挂半小时"，体验上不可接受；
-//   - 5 分钟也足够把"搜索频率过高"这种典型触发模式 cooldown 过去。
-const SearchRateLimitCooldown = 5 * time.Minute
-
 const MaxRetry = 3
 
 type refreshDebouncer struct {
@@ -156,14 +148,14 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 			// 表现：skey/vid 还活着，其他业务 API 正常，只有搜索类路径返 -2041，
 			// 同时带 `errlog: CAPw0V0` 之类的 traceId。跟 -2010 的"账号级可疑"不是一档事。
 			//
-			// 策略（单账号不能 mark dead，否则服务直接瘫）：
+			// 策略：
 			//  1. 第一次碰到 → 尝试 refresh 一次（换 skey 有时能让搜索维度计数重置）；
 			//     refresh 成功就 preferID 回原账号重试一次原请求；
-			//  2. refresh 起不了作用 / 重试还是 -2041 → 短冷却 5 min，返回错误；
+			//  2. refresh 起不了作用 / 重试还是 -2041 → 直接返回错误，不 cooldown 账号。
+			//     cooldown 会导致单账号场景下服务完全不可用，且频繁触发时会"一直 cooldown
+			//     永不恢复"。-2041 本身是频率限制不是账号失效，返回错误让调用方（scheduler）
+			//     下轮重试即可。
 			//  3. 全程不 mark dead；-2041 本身不是 skey 失效信号。
-			//
-			// 不走 MaxRetry 满格循环：只允许"1 次 refresh + 1 次重试"，避免把风控
-			// 信号进一步放大。
 			log.Printf("[caller] -2041 search-rate-limit account=%d vid=%d path=%s errmsg=%q attempt=%d triedRefresh=%t",
 				acc.ID, acc.VID, opt.Path, hdr.ErrMsg, attempt, triedRefreshFor2041)
 			if !triedRefreshFor2041 && cr.tryRefresh(ctx, acc, opt.Path) {
@@ -171,8 +163,8 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 				preferID = acc.ID
 				continue
 			}
-			_ = cr.Store.MarkAccountCooldown(ctx, acc.ID,
-				"errcode=-2041 search rate limit "+hdr.ErrMsg, SearchRateLimitCooldown)
+			// 不 cooldown：-2041 是频率限制，不是账号失效。cooldown 会让服务在 5 分钟内
+			// 完全不可用，且频繁请求时会反复刷新 cooldown 时间导致"永远恢复不了"。
 			lastErr = fmt.Errorf("account %d search rate-limited (-2041): %s", acc.ID, hdr.ErrMsg)
 			continue
 

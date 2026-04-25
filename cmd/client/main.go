@@ -118,8 +118,11 @@ func main() {
 	scheduler := articles.NewScheduler(st, artSvc)
 	go scheduler.Run(ctx)
 
-	alerter := articles.NewAlerter(st, notifier)
-	go alerter.Run(ctx)
+	// alerter 已禁用：failure rate 统计基于 article_fetch_logs，但 web/mp/shareChapter
+	// 多链 fallback 机制下，中间链的"失败"（如 #js_content 不存在、响应无正文）很多是
+	// 正常可接受的情况，不能真实反映服务质量。如需监控请直接查看日志或接口成功率。
+	// alerter := articles.NewAlerter(st, notifier)
+	// go alerter.Run(ctx)
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
