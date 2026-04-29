@@ -85,6 +85,7 @@ func NewRouter(
 			authed.DELETE("/subscriptions/:id", subH.Delete)
 			authed.GET("/subscriptions/:id/articles", subH.Articles)
 			authed.POST("/subscriptions/:id/refresh", subH.Refresh)
+			authed.POST("/subscriptions/refresh-all", subH.RefreshAll)
 
 			artH := &ArticleHandlers{Articles: artSvc}
 			authed.GET("/articles", artH.List)

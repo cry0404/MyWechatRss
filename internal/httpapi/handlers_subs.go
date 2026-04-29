@@ -156,3 +156,21 @@ func (h *SubsHandlers) Refresh(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"new_count": n})
 }
+
+func (h *SubsHandlers) RefreshAll(c *gin.Context) {
+	result, err := h.ArticleSvc.FetchAll(c.Request.Context(), auth.CurrentUserID(c))
+	if err != nil {
+		respondErr(c, http.StatusBadGateway, err)
+		return
+	}
+
+	totalNew := 0
+	for _, n := range result {
+		totalNew += n
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"total_new":   totalNew,
+		"sub_count":   len(result),
+		"per_sub":     result,
+	})
+}

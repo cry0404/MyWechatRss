@@ -17,6 +17,7 @@ import (
 	"github.com/cry0404/MyWechatRss/internal/config"
 	"github.com/cry0404/MyWechatRss/internal/crypto"
 	"github.com/cry0404/MyWechatRss/internal/httpapi"
+	"github.com/cry0404/MyWechatRss/internal/keepalive"
 	"github.com/cry0404/MyWechatRss/internal/model"
 	"github.com/cry0404/MyWechatRss/internal/notify"
 	"github.com/cry0404/MyWechatRss/internal/rss"
@@ -117,6 +118,9 @@ func main() {
 
 	scheduler := articles.NewScheduler(st, artSvc)
 	go scheduler.Run(ctx)
+
+	keepaliveScheduler := keepalive.NewScheduler(st, caller)
+	go keepaliveScheduler.Run(ctx)
 
 	// alerter 已禁用：failure rate 统计基于 article_fetch_logs，但 web/mp/shareChapter
 	// 多链 fallback 机制下，中间链的"失败"（如 #js_content 不存在、响应无正文）很多是

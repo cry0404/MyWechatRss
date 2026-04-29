@@ -94,6 +94,8 @@ export const api = {
     request<Article[]>("GET", `/api/subscriptions/${id}/articles?offset=${offset || 0}`),
   refreshSubscription: (id: number) =>
     request<{ new_count: number }>("POST", `/api/subscriptions/${id}/refresh`),
+  refreshAllSubscriptions: () =>
+    request<{ total_new: number; sub_count: number; per_sub: Record<string, number> }>("POST", "/api/subscriptions/refresh-all"),
 
   // Global articles (all subscriptions merged, paginated)
   getGlobalArticles: (limit?: number, offset?: number) =>

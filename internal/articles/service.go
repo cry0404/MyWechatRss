@@ -451,6 +451,39 @@ func (s *Service) ListByUser(ctx context.Context, userID int64, limit, offset in
 	return s.Store.ListArticlesByUser(ctx, userID, limit, offset)
 }
 
+// FetchAll 拉取指定用户的所有订阅（无视调度间隔）。
+// 返回 {bookID: newCount} 的汇总结果，以及过程中遇到的最后一个错误。
+func (s *Service) FetchAll(ctx context.Context, userID int64) (map[string]int, error) {
+	subs, err := s.Store.ListSubscriptionsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(subs) == 0 {
+		return map[string]int{}, nil
+	}
+
+	result := make(map[string]int, len(subs))
+	var lastErr error
+
+	for _, sub := range subs {
+		if ctx.Err() != nil {
+			break
+		}
+		if sub.Disabled {
+			continue
+		}
+		n, err := s.FetchLatest(ctx, userID, sub.ID)
+		if err != nil {
+			lastErr = err
+			log.Printf("fetch-all: sub %d (%s): %v", sub.ID, sub.BookID, err)
+		}
+		result[sub.BookID] = n
+		jitterSleep(ctx, 2*time.Second, 5*time.Second)
+	}
+
+	return result, lastErr
+}
+
 func jitterSleep(ctx context.Context, min, max time.Duration) {
 	if max <= min {
 		time.Sleep(min)

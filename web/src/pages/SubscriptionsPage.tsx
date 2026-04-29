@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
   ListFilter,
   MoreHorizontal,
+  RefreshCw,
 } from "lucide-react";
 import { api, type SearchResult, type Subscription } from "@/lib/api";
 import { SafeImg } from "@/components/SafeImg";
@@ -369,6 +370,16 @@ export default function SubscriptionsPage() {
     onError: (err) => showAlert(toUserMessage(err)),
   });
 
+  const refreshAllMutation = useMutation({
+    mutationFn: () => api.refreshAllSubscriptions(),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+      queryClient.invalidateQueries({ queryKey: ["articles"] });
+      showAlert(`全部拉取完成，新增 ${data.total_new} 篇文章`);
+    },
+    onError: (err) => showAlert(toUserMessage(err)),
+  });
+
   const handleCopyFeed = async (sub: Subscription) => {
     const url = `${window.location.origin}/rss/${sub.feed_id}`;
     try {
@@ -380,12 +391,38 @@ export default function SubscriptionsPage() {
     }
   };
 
-  const exportJSON = () => {
+  const exportOPML = () => {
     if (!subscriptions?.length) return;
-    const blob = new Blob([JSON.stringify(subscriptions, null, 2)], { type: "application/json" });
+
+    const escapeXml = (str: string) =>
+      str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    let opml = `<?xml version="1.0" encoding="UTF-8"?>
+<opml version="2.0">
+  <head>
+    <title>WeChatRead Subscriptions</title>
+    <dateCreated>${new Date().toUTCString()}</dateCreated>
+  </head>
+  <body>
+`;
+
+    for (const sub of subscriptions) {
+      const xmlUrl = `${window.location.origin}/rss/${sub.feed_id}`;
+      opml += `    <outline text="${escapeXml(sub.alias)}" title="${escapeXml(sub.alias)}" type="rss" xmlUrl="${escapeXml(xmlUrl)}" htmlUrl="${escapeXml(xmlUrl)}"/>
+`;
+    }
+
+    opml += `  </body>
+</opml>`;
+
+    const blob = new Blob([opml], { type: "application/xml" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `wechatread-subscriptions-${Date.now()}.json`;
+    a.download = `wechatread-subscriptions-${Date.now()}.opml`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -426,12 +463,25 @@ export default function SubscriptionsPage() {
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
-            onClick={exportJSON}
+            onClick={() => refreshAllMutation.mutate()}
+            disabled={!subscriptions?.length || refreshAllMutation.isPending}
+            className="btn-secondary rounded-full text-base px-4 py-2 disabled:opacity-40"
+          >
+            {refreshAllMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.5} />
+            ) : (
+              <RefreshCw className="h-4 w-4 opacity-80" strokeWidth={2.5} />
+            )}
+            {refreshAllMutation.isPending ? "拉取中…" : "全部拉取"}
+          </button>
+          <button
+            type="button"
+            onClick={exportOPML}
             disabled={!subscriptions?.length}
             className="btn-secondary rounded-full text-base px-4 py-2 disabled:opacity-40"
           >
             <Download className="h-4 w-4 opacity-80" strokeWidth={2.5} />
-            导出
+            导出 OPML
           </button>
           <button
             type="button"

@@ -3,3 +3,5 @@ data/
 wechatread-client
 web/node_modules
 .env.test
+deploy.sh
+.claude/skills

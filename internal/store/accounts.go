@@ -272,6 +272,37 @@ func (s *Store) DeleteAccount(ctx context.Context, userID, id int64) error {
 	return err
 }
 
+func (s *Store) ListAllActiveAccounts(ctx context.Context) ([]*model.WeReadAccount, error) {
+	now := time.Now().Unix()
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE weread_accounts
+		SET status = 'active', cooldown_until = 0, last_err = ''
+		WHERE status = 'cooldown' AND cooldown_until <= ?
+	`, now)
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, user_id, vid, skey_enc, refresh_token_enc, cookies_enc,
+		       nickname, avatar, status, cooldown_until, last_ok_at, last_err,
+		       created_at, device_id, install_id, device_name
+		FROM weread_accounts
+		WHERE status = 'active'
+		ORDER BY last_ok_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*model.WeReadAccount
+	for rows.Next() {
+		a, err := s.scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }
