@@ -202,6 +202,19 @@ func (cr *Caller) mergeCookies(ctx context.Context, acc *model.WeReadAccount, fr
 	}
 }
 
+// ProactiveRefresh 主动对账号做 refreshToken 续期，不依赖 API 错误触发。
+// 适合在保活调度器等场景里"提前续期"，避免在业务调用路径上才被动处理 -2012。
+// 返回 true 表示续期成功或无需续期（无 refreshToken），false 表示续期失败。
+func (cr *Caller) ProactiveRefresh(ctx context.Context, acc *model.WeReadAccount) bool {
+	if acc.RefreshToken == "" {
+		return true // 没有 refreshToken 就无法主动续期，也不算失败
+	}
+	if !cr.refreshGuard.allow(acc.ID, time.Now()) {
+		return true // 被防抖了，当做"成功"（近期已经续过）
+	}
+	return cr.doRefresh(ctx, acc, "", "proactive")
+}
+
 func (cr *Caller) tryRefresh(ctx context.Context, acc *model.WeReadAccount, refCgi string) bool {
 	if acc.RefreshToken == "" {
 		log.Printf("[caller refresh] skip account=%d vid=%d refCgi=%q reason=no-refresh-token",
@@ -213,8 +226,14 @@ func (cr *Caller) tryRefresh(ctx context.Context, acc *model.WeReadAccount, refC
 			acc.ID, acc.VID, refCgi, minRefreshInterval)
 		return false
 	}
-	log.Printf("[caller refresh] start account=%d vid=%d refCgi=%q",
-		acc.ID, acc.VID, refCgi)
+	return cr.doRefresh(ctx, acc, refCgi, "on-error")
+}
+
+// doRefresh 执行实际的 refreshToken 续期逻辑。
+// trigger 参数用于日志标记，如 "on-error"（API 失败后触发）或 "proactive"（保活主动触发）。
+func (cr *Caller) doRefresh(ctx context.Context, acc *model.WeReadAccount, refCgi, trigger string) bool {
+	log.Printf("[caller refresh] start account=%d vid=%d refCgi=%q trigger=%s",
+		acc.ID, acc.VID, refCgi, trigger)
 	startAt := time.Now()
 
 	newCred, err := cr.Upstream.LoginRefresh(ctx, upstream.LoginRefreshReq{
@@ -266,10 +285,11 @@ func (cr *Caller) tryRefresh(ctx context.Context, acc *model.WeReadAccount, refC
 		acc.Cookies = cred.Cookies
 	}
 
-	log.Printf("[caller refresh] ok account=%d vid=%d newVid=%d skeyLen=%d rtRolled=%t ckRolled=%t elapsed=%s",
+	log.Printf("[caller refresh] ok account=%d vid=%d newVid=%d skeyLen=%d rtRolled=%t ckRolled=%t trigger=%s elapsed=%s",
 		acc.ID, acc.VID, cred.VID, len(cred.SKey),
 		rtArg != nil && cred.RefreshToken != oldRT,
 		ckArg != nil,
+		trigger,
 		time.Since(startAt))
 	return true
 }
