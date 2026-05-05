@@ -34,10 +34,12 @@ func NewService(st *store.Store, cr *accounts.Caller, mode string) *Service {
 var (
 	firstFetchSleepMin = 5 * time.Second
 	firstFetchSleepMax = 12 * time.Second
-	incrFetchSleepMin = 15 * time.Second
-	incrFetchSleepMax = 25 * time.Second
-	firstFetchMax = 30
-	incrFetchPage = 20
+	incrFetchSleepMin  = 15 * time.Second
+	incrFetchSleepMax  = 25 * time.Second
+	fetchAllSleepMin   = 30 * time.Second
+	fetchAllSleepMax   = 120 * time.Second
+	firstFetchMax      = 30
+	incrFetchPage      = 20
 )
 
 func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, error) {
@@ -49,6 +51,9 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 
 	acc, err := s.Store.PickActiveAccount(ctx, userID)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return 0, fmt.Errorf("pick account: %w", accounts.ErrNoAccount)
+		}
 		return 0, fmt.Errorf("pick account: %w", err)
 	}
 	preferID := acc.ID
@@ -374,15 +379,13 @@ func (s *Service) fetchContentViaWebContent(ctx context.Context, userID int64, r
 }
 
 func (s *Service) fetchContentViaShareChapter(ctx context.Context, userID, preferAccountID int64, reviewID string) error {
-	// 尝试多种参数组合，因为 shareChapter 协议可能已变
+	// shareChapter 是最高风险的账号接口，只保留当前确认过的最小请求形态。
+	// 协议漂移时不要在同一篇文章上连续试探多组参数，避免放大风控权重。
 	attempts := []struct {
 		name  string
 		query map[string]string
 	}{
 		{"original", map[string]string{"cmd": "get", "reviewId": reviewID}},
-		{"with_version", map[string]string{"cmd": "get", "reviewId": reviewID, "version": "2"}},
-		{"with_synckey", map[string]string{"cmd": "get", "reviewId": reviewID, "synckey": "0"}},
-		{"with_both", map[string]string{"cmd": "get", "reviewId": reviewID, "version": "2", "synckey": "0"}},
 	}
 
 	var lastErr error
@@ -478,7 +481,7 @@ func (s *Service) FetchAll(ctx context.Context, userID int64) (map[string]int, e
 			log.Printf("fetch-all: sub %d (%s): %v", sub.ID, sub.BookID, err)
 		}
 		result[sub.BookID] = n
-		jitterSleep(ctx, 2*time.Second, 5*time.Second)
+		jitterSleep(ctx, fetchAllSleepMin, fetchAllSleepMax)
 	}
 
 	return result, lastErr
@@ -551,4 +554,3 @@ func dumpMpInfoOnce(reviewID string, createTime int64, mpInfo map[string]interfa
 	}, "", "  ")
 	log.Printf("[dump once] /book/articles first review (coverBoxInfo stripped):\n%s", string(b))
 }
-

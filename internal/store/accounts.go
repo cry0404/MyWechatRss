@@ -221,8 +221,8 @@ func (s *Store) UpdateAccountCredential(
 		return err
 	}
 
-	sets := []string{"skey_enc = ?", "status = 'active'", "cooldown_until = 0", "last_err = ''"}
-	args := []any{skeyEnc}
+	sets := []string{"skey_enc = ?", "status = 'active'", "cooldown_until = 0", "last_ok_at = ?", "last_err = ''"}
+	args := []any{skeyEnc, time.Now().Unix()}
 
 	if refreshToken != nil {
 		rtEnc, err := s.codec.Encrypt(*refreshToken)

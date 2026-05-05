@@ -27,6 +27,15 @@ const CooldownDuration = 30 * time.Minute
 
 const MaxRetry = 3
 
+type refreshResult int
+
+const (
+	refreshUnavailable refreshResult = iota
+	refreshDebounced
+	refreshFailed
+	refreshSucceeded
+)
+
 type refreshDebouncer struct {
 	mu   sync.Mutex
 	last map[int64]time.Time
@@ -70,10 +79,6 @@ var ErrNoAccount = errors.New("no available weread account (请先扫码绑定�
 func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallResult, error) {
 	var lastErr error
 	preferID := opt.PreferAccountID
-	// triedRefreshFor2041 记录"这一次 Do() 调用内，针对当前 account 是否已经
-	// 为 -2041 尝试过一次 refresh"。跨 account（failover 后换号）时会被 picker
-	// 切换掉的账号自动带过去（保守策略：单账号场景我们其实也不会真换号）。
-	triedRefreshFor2041 := false
 	for attempt := 0; attempt < MaxRetry; attempt++ {
 		acc, err := cr.pickAccount(ctx, userID, preferID)
 		if err != nil {
@@ -118,14 +123,31 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 			}
 			log.Printf("[caller] session-expired account=%d vid=%d path=%s signal=%q attempt=%d -> refresh",
 				acc.ID, acc.VID, opt.Path, signal, attempt)
-			if cr.tryRefresh(ctx, acc, opt.Path) {
+			refresh := cr.tryRefresh(ctx, acc, opt.Path)
+			if refresh == refreshSucceeded {
 				preferID = acc.ID
 				continue
 			}
-			log.Printf("[caller] mark-dead account=%d vid=%d reason=%q attempt=%d",
-				acc.ID, acc.VID, signal, attempt)
-			_ = cr.Store.MarkAccountDead(ctx, acc.UserID, acc.ID, signal)
-			lastErr = fmt.Errorf("account %d dead: %s", acc.ID, signal)
+			if refresh == refreshDebounced && attempt+1 < MaxRetry {
+				// 另一个 goroutine 刚续期过时，当前请求可能拿的是旧 skey。
+				// 重新从 DB pick 一次账号，让它有机会使用刚写入的新凭证。
+				log.Printf("[caller] retry-after-recent-refresh account=%d vid=%d path=%s attempt=%d",
+					acc.ID, acc.VID, opt.Path, attempt)
+				preferID = acc.ID
+				lastErr = fmt.Errorf("account %d auth refresh recently attempted: %s", acc.ID, signal)
+				continue
+			}
+			if shouldMarkDeadAfterAuthFailure(opt.Path) {
+				log.Printf("[caller] mark-dead account=%d vid=%d reason=%q attempt=%d",
+					acc.ID, acc.VID, signal, attempt)
+				_ = cr.Store.MarkAccountDead(ctx, acc.UserID, acc.ID, signal)
+				lastErr = fmt.Errorf("account %d dead: %s", acc.ID, signal)
+				continue
+			}
+			log.Printf("[caller] cooldown account=%d vid=%d path=%s reason=%q attempt=%d",
+				acc.ID, acc.VID, opt.Path, signal, attempt)
+			_ = cr.Store.MarkAccountCooldown(ctx, acc.ID, signal, CooldownDuration)
+			lastErr = fmt.Errorf("account %d cooldown: %s", acc.ID, signal)
 			continue
 		}
 
@@ -143,28 +165,19 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 			continue
 
 		case -2041:
-			// 搜索接口 (/store/search 等) 专属的频率风控。
+			// 搜索/列表接口 (/store/search, /book/articles 等) 的频率风控。
 			//
 			// 表现：skey/vid 还活着，其他业务 API 正常，只有搜索类路径返 -2041，
 			// 同时带 `errlog: CAPw0V0` 之类的 traceId。跟 -2010 的"账号级可疑"不是一档事。
 			//
 			// 策略：
-			//  1. 第一次碰到 → 尝试 refresh 一次（换 skey 有时能让搜索维度计数重置）；
-			//     refresh 成功就 preferID 回原账号重试一次原请求；
-			//  2. refresh 起不了作用 / 重试还是 -2041 → 直接返回错误，不 cooldown 账号。
-			//     cooldown 会导致单账号场景下服务完全不可用，且频繁触发时会"一直 cooldown
-			//     永不恢复"。-2041 本身是频率限制不是账号失效，返回错误让调用方（scheduler）
-			//     下轮重试即可。
-			//  3. 全程不 mark dead；-2041 本身不是 skey 失效信号。
-			log.Printf("[caller] -2041 search-rate-limit account=%d vid=%d path=%s errmsg=%q attempt=%d triedRefresh=%t",
-				acc.ID, acc.VID, opt.Path, hdr.ErrMsg, attempt, triedRefreshFor2041)
-			if !triedRefreshFor2041 && cr.tryRefresh(ctx, acc, opt.Path) {
-				triedRefreshFor2041 = true
-				preferID = acc.ID
-				continue
-			}
-			// 不 cooldown：-2041 是频率限制，不是账号失效。cooldown 会让服务在 5 分钟内
-			// 完全不可用，且频繁请求时会反复刷新 cooldown 时间导致"永远恢复不了"。
+			//  1. 不 refresh：refresh 不能证明能解除频控，反而增加登录链路请求。
+			//  2. 不立即重试：同一窗口连续打只会延长风控。
+			//  3. cooldown 而不是 dead：让账号自动恢复，避免不必要的重新扫码。
+			log.Printf("[caller] -2041 search-rate-limit account=%d vid=%d path=%s errmsg=%q attempt=%d -> cooldown",
+				acc.ID, acc.VID, opt.Path, hdr.ErrMsg, attempt)
+			reason := "errcode=-2041 " + hdr.ErrMsg
+			_ = cr.Store.MarkAccountCooldown(ctx, acc.ID, reason, CooldownDuration)
 			lastErr = fmt.Errorf("account %d search rate-limited (-2041): %s", acc.ID, hdr.ErrMsg)
 			continue
 
@@ -215,18 +228,21 @@ func (cr *Caller) ProactiveRefresh(ctx context.Context, acc *model.WeReadAccount
 	return cr.doRefresh(ctx, acc, "", "proactive")
 }
 
-func (cr *Caller) tryRefresh(ctx context.Context, acc *model.WeReadAccount, refCgi string) bool {
+func (cr *Caller) tryRefresh(ctx context.Context, acc *model.WeReadAccount, refCgi string) refreshResult {
 	if acc.RefreshToken == "" {
 		log.Printf("[caller refresh] skip account=%d vid=%d refCgi=%q reason=no-refresh-token",
 			acc.ID, acc.VID, refCgi)
-		return false
+		return refreshUnavailable
 	}
 	if !cr.refreshGuard.allow(acc.ID, time.Now()) {
 		log.Printf("[caller refresh] skip account=%d vid=%d refCgi=%q reason=debounced (last refresh < %s ago)",
 			acc.ID, acc.VID, refCgi, minRefreshInterval)
-		return false
+		return refreshDebounced
 	}
-	return cr.doRefresh(ctx, acc, refCgi, "on-error")
+	if cr.doRefresh(ctx, acc, refCgi, "on-error") {
+		return refreshSucceeded
+	}
+	return refreshFailed
 }
 
 // doRefresh 执行实际的 refreshToken 续期逻辑。
@@ -305,6 +321,15 @@ func (cr *Caller) pickAccount(ctx context.Context, userID, preferID int64) (*mod
 		}
 	}
 	return cr.Store.PickActiveAccount(ctx, userID)
+}
+
+func shouldMarkDeadAfterAuthFailure(path string) bool {
+	switch path {
+	case "/device/sessionlist":
+		return true
+	default:
+		return false
+	}
 }
 
 func packBody(body []byte, bodyType string) (json.RawMessage, error) {

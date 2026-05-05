@@ -81,7 +81,7 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 		if n == 0 {
 			seenUsers[uid] = true
 			if _, alreadyWarned := s.warnedUsers.LoadOrStore(uid, struct{}{}); !alreadyWarned {
-				log.Printf("fetch: user %d has no active weread account, pausing scheduler for this user until rescan", uid)
+				log.Printf("fetch: user %d has no active weread account, pausing scheduler for this user until cooldown expires or rescan", uid)
 			}
 			continue
 		}
