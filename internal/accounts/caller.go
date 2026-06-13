@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,12 @@ type Caller struct {
 const minRefreshInterval = 10 * time.Second
 
 const CooldownDuration = 30 * time.Minute
+
+const RateLimitCooldownDuration = 4 * time.Hour
+
+const AuthRefreshRetryDelay = 2 * time.Hour
+
+const staleCredentialThreshold = 40 * time.Minute
 
 const MaxRetry = 3
 
@@ -76,6 +83,10 @@ type werrHeader struct {
 
 var ErrNoAccount = errors.New("no available weread account (请先扫码绑定或稍后再试)")
 
+var ErrSearchRateLimited = errors.New("weread search/list rate limited")
+
+var ErrHighRiskDeferred = errors.New("weread high-risk call deferred after credential refresh")
+
 func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallResult, error) {
 	var lastErr error
 	preferID := opt.PreferAccountID
@@ -84,7 +95,7 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				if lastErr != nil {
-					return nil, fmt.Errorf("%w (last err: %v)", ErrNoAccount, lastErr)
+					return nil, fmt.Errorf("%w (last err: %w)", ErrNoAccount, lastErr)
 				}
 				return nil, ErrNoAccount
 			}
@@ -95,6 +106,18 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 		body, err := packBody(opt.Body, opt.BodyType)
 		if err != nil {
 			return nil, err
+		}
+
+		if shouldProactiveRefreshBeforeCall(opt.Path, acc) {
+			refresh := cr.tryRefresh(ctx, acc, opt.Path)
+			if refresh == refreshSucceeded {
+				log.Printf("[caller] defer-high-risk-after-proactive-refresh account=%d vid=%d path=%s delay=%s",
+					acc.ID, acc.VID, opt.Path, AuthRefreshRetryDelay)
+				return nil, fmt.Errorf("%w: account %d refreshed before %s", ErrHighRiskDeferred, acc.ID, opt.Path)
+			}
+		}
+		if shouldWarmupBusinessSessionBeforeCall(opt.Path, acc) {
+			cr.warmupBusinessSession(ctx, acc)
 		}
 		resp, err := cr.Upstream.Call(ctx, upstream.CallReq{
 			Credential: upstream.CredentialLite{
@@ -125,6 +148,11 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 				acc.ID, acc.VID, opt.Path, signal, attempt)
 			refresh := cr.tryRefresh(ctx, acc, opt.Path)
 			if refresh == refreshSucceeded {
+				if shouldDeferBusinessRetryAfterRefresh(opt.Path) {
+					log.Printf("[caller] defer-retry-after-refresh account=%d vid=%d path=%s delay=%s reason=%q",
+						acc.ID, acc.VID, opt.Path, AuthRefreshRetryDelay, signal)
+					return nil, fmt.Errorf("%w: account %d refreshed after %s", ErrHighRiskDeferred, acc.ID, signal)
+				}
 				preferID = acc.ID
 				continue
 			}
@@ -177,8 +205,8 @@ func (cr *Caller) Do(ctx context.Context, userID int64, opt CallOptions) (*CallR
 			log.Printf("[caller] -2041 search-rate-limit account=%d vid=%d path=%s errmsg=%q attempt=%d -> cooldown",
 				acc.ID, acc.VID, opt.Path, hdr.ErrMsg, attempt)
 			reason := "errcode=-2041 " + hdr.ErrMsg
-			_ = cr.Store.MarkAccountCooldown(ctx, acc.ID, reason, CooldownDuration)
-			lastErr = fmt.Errorf("account %d search rate-limited (-2041): %s", acc.ID, hdr.ErrMsg)
+			_ = cr.Store.MarkAccountCooldown(ctx, acc.ID, reason, RateLimitCooldownDuration)
+			lastErr = fmt.Errorf("%w: account %d path=%s: %s", ErrSearchRateLimited, acc.ID, opt.Path, hdr.ErrMsg)
 			continue
 
 		default:
@@ -213,6 +241,106 @@ func (cr *Caller) mergeCookies(ctx context.Context, acc *model.WeReadAccount, fr
 	if err := cr.Store.UpdateAccountCookies(ctx, acc.ID, acc.Cookies); err != nil {
 		fmt.Printf("[caller] merge cookies for account %d failed: %v\n", acc.ID, err)
 	}
+}
+
+func (cr *Caller) warmupBusinessSession(ctx context.Context, acc *model.WeReadAccount) {
+	cr.warmupMobileSync(ctx, acc)
+
+	resp, err := cr.Upstream.Call(ctx, upstream.CallReq{
+		Credential: upstream.CredentialLite{
+			VID:      acc.VID,
+			SKey:     acc.SKey,
+			Cookies:  acc.Cookies,
+			DeviceID: acc.DeviceID,
+		},
+		Method: "GET",
+		Path:   "/shelf/sync",
+		Query: map[string]string{
+			"album":          "1",
+			"localBookCount": "0",
+			"onlyBookid":     "1",
+			"synckey":        "0",
+		},
+	})
+	if err != nil {
+		log.Printf("[caller warmup] shelf-sync upstream-error account=%d vid=%d err=%v", acc.ID, acc.VID, err)
+		return
+	}
+
+	var hdr werrHeader
+	_ = json.Unmarshal(resp.Body, &hdr)
+	if resp.Status == 200 && hdr.ErrCode == 0 {
+		_ = cr.Store.MarkAccountOK(ctx, acc.ID)
+		cr.mergeCookies(ctx, acc, resp.Cookies)
+		log.Printf("[caller warmup] ok account=%d vid=%d path=/shelf/sync", acc.ID, acc.VID)
+		return
+	}
+	log.Printf("[caller warmup] shelf-sync failed account=%d vid=%d status=%d errcode=%d errmsg=%q",
+		acc.ID, acc.VID, resp.Status, hdr.ErrCode, hdr.ErrMsg)
+}
+
+func (cr *Caller) warmupMobileSync(ctx context.Context, acc *model.WeReadAccount) {
+	body, err := json.Marshal(map[string]any{
+		"follower":              0,
+		"discoverColumnSynckey": 0,
+		"discoverFeedSynckey":   0,
+		"reviewTimeline":        0,
+		"notifications":         0,
+		"inBackground":          0,
+		"localBrowseTab":        0,
+		"applyList":             0,
+		"refluxSynckey":         0,
+		"rateSynckey":           0,
+		"medal":                 0,
+		"chat":                  0,
+		"shelf":                 0,
+		"localCommunityTab":     0,
+		"configsets":            0,
+		"medalUrl":              0,
+		"booklist":              0,
+		"friendReviewSynckey":   0,
+		"preferTab":             0,
+		"mcard":                 0,
+		"following":             0,
+		"chatRemovedSynckey":    0,
+		"searchSynckey":         0,
+		"readingExchange":       0,
+		"wehearSyncKey":         0,
+		"wechatFriend":          0,
+		"config":                0,
+		"gift":                  0,
+	})
+	if err != nil {
+		log.Printf("[caller warmup] mobileSync build-body-error account=%d vid=%d err=%v", acc.ID, acc.VID, err)
+		return
+	}
+
+	resp, err := cr.Upstream.Call(ctx, upstream.CallReq{
+		Credential: upstream.CredentialLite{
+			VID:      acc.VID,
+			SKey:     acc.SKey,
+			Cookies:  acc.Cookies,
+			DeviceID: acc.DeviceID,
+		},
+		Method:   "POST",
+		Path:     "/mobileSync",
+		Body:     json.RawMessage(body),
+		BodyType: "json",
+	})
+	if err != nil {
+		log.Printf("[caller warmup] mobileSync upstream-error account=%d vid=%d err=%v", acc.ID, acc.VID, err)
+		return
+	}
+
+	var hdr werrHeader
+	_ = json.Unmarshal(resp.Body, &hdr)
+	if resp.Status == 200 && hdr.ErrCode == 0 {
+		cr.mergeCookies(ctx, acc, resp.Cookies)
+		log.Printf("[caller warmup] ok account=%d vid=%d path=/mobileSync", acc.ID, acc.VID)
+		return
+	}
+	log.Printf("[caller warmup] mobileSync failed account=%d vid=%d status=%d errcode=%d errmsg=%q",
+		acc.ID, acc.VID, resp.Status, hdr.ErrCode, hdr.ErrMsg)
 }
 
 // ProactiveRefresh 主动对账号做 refreshToken 续期，不依赖 API 错误触发。
@@ -326,6 +454,36 @@ func (cr *Caller) pickAccount(ctx context.Context, userID, preferID int64) (*mod
 func shouldMarkDeadAfterAuthFailure(path string) bool {
 	switch path {
 	case "/device/sessionlist":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldProactiveRefreshBeforeCall(path string, acc *model.WeReadAccount) bool {
+	if !shouldDeferBusinessRetryAfterRefresh(path) {
+		return false
+	}
+	if acc.RefreshToken == "" || acc.LastOkAt == 0 {
+		return false
+	}
+	return time.Since(time.Unix(acc.LastOkAt, 0)) > staleCredentialThreshold
+}
+
+func shouldWarmupBusinessSessionBeforeCall(path string, acc *model.WeReadAccount) bool {
+	return shouldDeferBusinessRetryAfterRefresh(path) && strings.HasPrefix(acc.LastErr, "errcode=-2041")
+}
+
+func shouldDeferBusinessRetryAfterRefresh(path string) bool {
+	switch path {
+	case "/book/articles",
+		"/store/search",
+		"/book/info",
+		"/book/getProgress",
+		"/book/readinfo",
+		"/book/detailinfo",
+		"/review/single",
+		"/book/shareChapter":
 		return true
 	default:
 		return false

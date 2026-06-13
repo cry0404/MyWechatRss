@@ -67,7 +67,7 @@ func Load() (*Config, error) {
 		FeedIDSalt:        getEnv("FEED_ID_SALT", "wechatread-rss"),
 		AllowRegister:     getEnvBool("ALLOW_REGISTER", false),
 		DefaultDeviceName: getEnv("DEFAULT_DEVICE_NAME", "wechatread-rss"),
-		ContentFetchMode:  parseFetchMode(getEnv("CONTENT_FETCH_MODE", "full")),
+		ContentFetchMode:  parseFetchMode(getEnv("CONTENT_FETCH_MODE", "summary")),
 		BootstrapUsername: getEnv("BOOTSTRAP_USERNAME", "admin"),
 		BootstrapPassword: getEnv("BOOTSTRAP_PASSWORD", "changeme"),
 		BootstrapEmail:    getEnv("BOOTSTRAP_EMAIL", "admin@local.invalid"),

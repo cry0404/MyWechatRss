@@ -33,31 +33,58 @@ type SearchResultItem struct {
 }
 
 func (s *Service) Search(ctx context.Context, userID int64, keyword string) ([]SearchResultItem, error) {
-	if strings.TrimSpace(keyword) == "" {
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
 		return nil, errors.New("keyword required")
 	}
-	res, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
+	initial, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
 		Method: http.MethodGet,
 		Path:   "/store/search",
 		Query: map[string]string{
-			"keyword": keyword,
-			"scope":   "2",
-			"type":    "0",
-			"v":       "2",
-			"count":   "20",
+			"count":     "10",
+			"keyword":   keyword,
+			"rnVersion": "6",
+			"v":         "3",
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	log.Printf("search raw body (keyword=%q): %s", keyword, truncateForLog(res.RawJSON, 2000))
+	sid, initialItems, err := parseSearchEnvelope(initial.RawJSON)
+	if err != nil {
+		return nil, fmt.Errorf("parse initial search: %w", err)
+	}
 
-	items, err := parseSearchResults(res.RawJSON)
+	query := map[string]string{
+		"count":   "15",
+		"keyword": keyword,
+		"scope":   "2",
+		"type":    "0",
+		"v":       "2",
+	}
+	if sid != "" {
+		query["sid"] = sid
+	}
+	res, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
+		Method: http.MethodGet,
+		Path:   "/store/search",
+		Query:  query,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("search raw body (keyword=%q sid=%q): %s", keyword, sid, truncateForLog(res.RawJSON, 2000))
+
+	_, scopedItems, err := parseSearchEnvelope(res.RawJSON)
 	if err != nil {
 		return nil, fmt.Errorf("parse search: %w", err)
 	}
-	return items, nil
+	if len(scopedItems) > 0 {
+		return scopedItems, nil
+	}
+	return initialItems, nil
 }
 
 type searchBookEntry struct {
@@ -80,9 +107,15 @@ func (n searchBookNode) pick() searchBookEntry {
 }
 
 func parseSearchResults(raw []byte) ([]SearchResultItem, error) {
+	_, items, err := parseSearchEnvelope(raw)
+	return items, err
+}
+
+func parseSearchEnvelope(raw []byte) (string, []SearchResultItem, error) {
 	var envelope struct {
 		ErrCode int              `json:"errcode"`
 		ErrMsg  string           `json:"errmsg"`
+		SID     string           `json:"sid"`
 		Books   []searchBookNode `json:"books"`
 		Results []struct {
 			Type  int              `json:"type"`
@@ -90,10 +123,10 @@ func parseSearchResults(raw []byte) ([]SearchResultItem, error) {
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if envelope.ErrCode != 0 {
-		return nil, fmt.Errorf("weread search errcode=%d errmsg=%s", envelope.ErrCode, envelope.ErrMsg)
+		return "", nil, fmt.Errorf("weread search errcode=%d errmsg=%s", envelope.ErrCode, envelope.ErrMsg)
 	}
 
 	seen := map[string]struct{}{}
@@ -123,7 +156,7 @@ func parseSearchResults(raw []byte) ([]SearchResultItem, error) {
 			add(n.pick())
 		}
 	}
-	return out, nil
+	return envelope.SID, out, nil
 }
 
 func (s *Service) Create(ctx context.Context, userID int64, bookID, alias string) (*model.Subscription, error) {
@@ -188,7 +221,7 @@ type UpdatePayload struct {
 }
 
 const (
-	minFetchIntervalSec = 60            // 1 分钟
+	minFetchIntervalSec = 2 * 60 * 60   // 2 小时
 	maxFetchIntervalSec = 7 * 24 * 3600 // 7 天
 )
 

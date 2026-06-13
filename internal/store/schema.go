@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     fetch_interval_sec  INTEGER NOT NULL DEFAULT 21600,
     fetch_window_start_min INTEGER NOT NULL DEFAULT -1,
     fetch_window_end_min   INTEGER NOT NULL DEFAULT -1,
+    next_fetch_after    INTEGER NOT NULL DEFAULT 0,
     last_fetch_at       INTEGER NOT NULL DEFAULT 0,
     last_review_time    INTEGER NOT NULL DEFAULT 0,
     created_at          INTEGER NOT NULL,
@@ -73,8 +74,12 @@ CREATE TABLE IF NOT EXISTS fetch_logs (
     started_at       INTEGER NOT NULL,
     cost_ms          INTEGER NOT NULL DEFAULT 0,
     new_count        INTEGER NOT NULL DEFAULT 0,
-    error            TEXT    NOT NULL DEFAULT ''
+    error            TEXT    NOT NULL DEFAULT '',
+    error_code       TEXT    NOT NULL DEFAULT '',
+    previous_rate_limit_at INTEGER NOT NULL DEFAULT 0,
+    seconds_since_last_rate_limit INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_fetch_logs_started ON fetch_logs(started_at);
 
 CREATE TABLE IF NOT EXISTS article_fetch_logs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,

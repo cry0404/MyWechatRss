@@ -3,6 +3,7 @@ package accounts
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -99,6 +100,7 @@ func TestDoCooldownsRateLimitedBookArticlesWithoutRefreshRetry(t *testing.T) {
 
 	cr := &Caller{Store: st, Upstream: up}
 
+	startedAt := time.Now().Unix()
 	_, err := cr.Do(ctx, user.ID, CallOptions{
 		Method: http.MethodGet,
 		Path:   "/book/articles",
@@ -106,6 +108,9 @@ func TestDoCooldownsRateLimitedBookArticlesWithoutRefreshRetry(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "-2041") {
 		t.Fatalf("expected -2041 error, got %v", err)
+	}
+	if !errors.Is(err, ErrSearchRateLimited) {
+		t.Fatalf("expected ErrSearchRateLimited, got %v", err)
 	}
 	if got := atomic.LoadInt32(&callCalls); got != 1 {
 		t.Fatalf("rate-limited request should not be retried immediately, got %d calls", got)
@@ -117,6 +122,148 @@ func TestDoCooldownsRateLimitedBookArticlesWithoutRefreshRetry(t *testing.T) {
 	got := getOnlyAccount(t, st, user.ID)
 	if got.Status != model.AccountCooldown {
 		t.Fatalf("expected cooldown after -2041, got %q last_err=%q", got.Status, got.LastErr)
+	}
+	minUntil := startedAt + int64((4*time.Hour - 2*time.Minute).Seconds())
+	maxUntil := startedAt + int64((4*time.Hour + 2*time.Minute).Seconds())
+	if got.CooldownUntil < minUntil || got.CooldownUntil > maxUntil {
+		t.Fatalf("expected 4h rate-limit cooldown, got until=%d want between %d and %d", got.CooldownUntil, minUntil, maxUntil)
+	}
+}
+
+func TestDoDefersHighRiskRetryAfterRefreshSuccessWithoutAccountCooldown(t *testing.T) {
+	ctx := context.Background()
+	st, user, acc := newCallerTestStore(t)
+
+	var articleCalls int32
+	var warmupCalls int32
+	var refreshCalls int32
+	up := testUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/proxy/weread/call":
+			var req upstream.CallReq
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode call req: %v", err)
+			}
+			switch req.Path {
+			case "/book/articles":
+				atomic.AddInt32(&articleCalls, 1)
+				writeJSON(t, w, upstream.CallResp{
+					Status:  http.StatusUnauthorized,
+					Headers: map[string]string{},
+					Body:    json.RawMessage(`{"errcode":-2012,"errmsg":"expired"}`),
+				})
+			case "/device/sessionlist":
+				atomic.AddInt32(&warmupCalls, 1)
+				writeJSON(t, w, upstream.CallResp{
+					Status:  http.StatusOK,
+					Headers: map[string]string{},
+					Body:    json.RawMessage(`{"errcode":0}`),
+				})
+			default:
+				t.Fatalf("unexpected upstream path %s", req.Path)
+			}
+		case "/proxy/weread/login/refresh":
+			atomic.AddInt32(&refreshCalls, 1)
+			writeJSON(t, w, upstream.LoginRefreshResp{
+				Status: "ok",
+				Credential: &upstream.Credential{
+					VID:          acc.VID,
+					SKey:         "new-skey",
+					RefreshToken: acc.RefreshToken,
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	cr := &Caller{Store: st, Upstream: up}
+
+	_, err := cr.Do(ctx, user.ID, CallOptions{
+		Method: http.MethodGet,
+		Path:   "/book/articles",
+		Query:  map[string]string{"bookId": "MP_WXS_1", "count": "20"},
+	})
+	if err == nil {
+		t.Fatal("expected deferred retry error")
+	}
+	if !errors.Is(err, ErrHighRiskDeferred) {
+		t.Fatalf("expected ErrHighRiskDeferred, got %v", err)
+	}
+	if got := atomic.LoadInt32(&articleCalls); got != 1 {
+		t.Fatalf("high-risk request should not be retried immediately after refresh, got %d calls", got)
+	}
+	if got := atomic.LoadInt32(&warmupCalls); got != 0 {
+		t.Fatalf("business refresh path should not rely on sessionlist warmup, got %d", got)
+	}
+	if got := atomic.LoadInt32(&refreshCalls); got != 1 {
+		t.Fatalf("expected one refresh, got %d", got)
+	}
+
+	got := getOnlyAccount(t, st, user.ID)
+	if got.Status != model.AccountActive {
+		t.Fatalf("expected account to remain active after refresh, got %q last_err=%q", got.Status, got.LastErr)
+	}
+	if got.SKey != "new-skey" {
+		t.Fatalf("expected refreshed credential to be saved, got %q", got.SKey)
+	}
+}
+
+func TestDoUsesAppWarmupBeforeBookArticlesAfterRateLimitCooldown(t *testing.T) {
+	ctx := context.Background()
+	st, user, acc := newCallerTestStore(t)
+	if _, err := st.DB().ExecContext(ctx, `
+		UPDATE weread_accounts
+		SET status='cooldown', cooldown_until=?, last_err='errcode=-2041 -2041'
+		WHERE id=?
+	`, time.Now().Add(-time.Minute).Unix(), acc.ID); err != nil {
+		t.Fatalf("set expired cooldown: %v", err)
+	}
+
+	var paths []string
+	var mobileSyncHasSearchKey bool
+	up := testUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/proxy/weread/call":
+			var req upstream.CallReq
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode call req: %v", err)
+			}
+			paths = append(paths, req.Path)
+			if req.Path == "/mobileSync" {
+				mobileSyncHasSearchKey = strings.Contains(string(req.Body), "searchSynckey")
+			}
+			writeJSON(t, w, upstream.CallResp{
+				Status:  http.StatusOK,
+				Headers: map[string]string{},
+				Body:    json.RawMessage(`{"errcode":0,"reviews":[]}`),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	cr := &Caller{Store: st, Upstream: up}
+
+	_, err := cr.Do(ctx, user.ID, CallOptions{
+		Method: http.MethodGet,
+		Path:   "/book/articles",
+		Query:  map[string]string{"bookId": "MP_WXS_1", "count": "20"},
+	})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	want := []string{"/mobileSync", "/shelf/sync", "/book/articles"}
+	if len(paths) != len(want) {
+		t.Fatalf("paths=%v want=%v", paths, want)
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Fatalf("paths=%v want=%v", paths, want)
+		}
+	}
+	if !mobileSyncHasSearchKey {
+		t.Fatalf("mobileSync body should include searchSynckey, paths=%v", paths)
 	}
 }
 

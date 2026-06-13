@@ -114,13 +114,17 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 			log.Printf("keepalive: account=%d vid=%d proactive-refresh ok", acc.ID, acc.VID)
 		}
 
-		// 用轻量 API 做心跳验证：/device/sessionlist 比 /shelf/sync 更轻。
+		// 用业务 API 做轻量心跳。/device/sessionlist 只能证明设备会话存在，
+		// 不能说明 /book/articles 所在的业务链路已经恢复；/shelf/sync
+		// 走现有 WeChatRead 业务代理，且 onlyBookid=1 避免拉完整书架元数据。
 		_, err := s.Caller.Do(ctx, acc.UserID, accounts.CallOptions{
 			Method: http.MethodGet,
-			Path:   "/device/sessionlist",
+			Path:   "/shelf/sync",
 			Query: map[string]string{
-				"deviceId": acc.DeviceID,
-				"onlyCnt":  "1",
+				"album":          "1",
+				"localBookCount": "0",
+				"onlyBookid":     "1",
+				"synckey":        "0",
 			},
 			PreferAccountID: acc.ID,
 		})

@@ -28,5 +28,6 @@ RUN mkdir -p /data
 VOLUME /data
 ENV DB_PATH=/data/app.db
 ENV LISTEN_ADDR=:8081
+ENV CONTENT_FETCH_MODE=summary
 EXPOSE 8081
 ENTRYPOINT ["./wechatread-client"]

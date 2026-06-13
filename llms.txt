@@ -1,0 +1,143 @@
+# WeChatRead RSS deployment guide for LLM agents
+
+This repository is the RSS client/web app. It stores users, WeRead account
+credentials, subscriptions, fetch logs, and cached articles in SQLite. It calls a
+separate private WeRead protocol server through HMAC-authenticated HTTP.
+
+## Do not leak secrets
+
+- Never commit `.env`, `.env.test`, `data/`, SQLite databases, logs, screenshots
+  containing QR codes, WeRead `skey`, `refreshToken`, cookies, HMAC secrets, SMTP
+  passwords, or production domains.
+- Use placeholders in docs and examples:
+  - `<APP_SECRET>`
+  - `<JWT_SECRET>`
+  - `<UPSTREAM_BASE_URL>`
+  - `<UPSTREAM_API_KEY_ID>`
+  - `<UPSTREAM_API_SECRET>`
+  - `<PUBLIC_BASE_URL>`
+- Generate random secrets with:
+
+```bash
+openssl rand -hex 32
+```
+
+## Runtime requirements
+
+- A Linux host that can reach the private WeRead protocol server.
+- Docker and Docker Compose for the recommended deployment.
+- A private protocol server already deployed from `cry0404/wechatread-server`.
+- A stable `PUBLIC_BASE_URL` used by RSS links and optional email links.
+
+## Quick Docker deployment
+
+1. Clone the repository.
+
+```bash
+git clone git@github.com:cry0404/MyWechatRss.git
+cd MyWechatRss
+```
+
+2. Create `.env` from the template.
+
+```bash
+cp .env.example .env
+```
+
+3. Fill `.env` with deployment-specific values.
+
+Required values:
+
+```bash
+APP_SECRET=<random 32-byte hex>
+JWT_SECRET=<another random 32-byte hex>
+UPSTREAM_BASE_URL=<private protocol server base URL>
+UPSTREAM_API_KEY_ID=<configured key id on the protocol server>
+UPSTREAM_API_SECRET=<matching HMAC secret>
+PUBLIC_BASE_URL=<external URL for this RSS app>
+```
+
+Recommended values:
+
+```bash
+CONTENT_FETCH_MODE=summary
+HOST_PORT=8081
+BOOTSTRAP_USERNAME=admin
+BOOTSTRAP_PASSWORD=<temporary password; change after first login>
+BOOTSTRAP_EMAIL=admin@example.invalid
+```
+
+`summary` mode is the safer default. It stores article metadata, summaries, and
+source links. `full` mode fetches and embeds full article HTML, which increases
+request volume and RSS size.
+
+4. Start the app.
+
+```bash
+docker compose up -d
+docker compose logs -f app
+```
+
+5. Check health.
+
+```bash
+curl -fsS http://127.0.0.1:${HOST_PORT:-8081}/health
+```
+
+Expected response:
+
+```json
+{"ok":true}
+```
+
+6. Open the app, log in with the bootstrap user, change the password, bind a
+WeRead account by QR code, then create subscriptions.
+
+## RSS behavior
+
+- Aggregate RSS includes the latest 30 items.
+- Single-subscription RSS includes the latest 20 items.
+- Historical articles remain in SQLite; only the RSS output is trimmed.
+- If an external reader still shows old content, force-refresh the feed or
+  remove and re-add it. Large older feeds may have been cached or timed out.
+
+## Operational notes
+
+- SQLite is stored under `./data` in Docker. Back up this directory before host
+  migration.
+- `APP_SECRET` encrypts stored WeRead credentials. Changing it without data
+  migration makes existing credentials unreadable.
+- The client should stay close to the private protocol server. The protocol
+  server itself must use a stable domestic egress IP because WeRead sessions are
+  bound to the login egress IP.
+- Avoid aggressive manual refreshes. The app has cooldown and scheduling logic
+  for `-2041` rate limits.
+
+## Local build and test
+
+```bash
+go test ./internal/...
+cd web && npm ci && npm run build
+cd ..
+go build -o wechatread-client ./cmd/client
+```
+
+Run locally with environment variables matching `.env.example`.
+
+## Image build
+
+```bash
+docker buildx build --platform linux/amd64 -t wechatread-client:local .
+```
+
+For a single-server manual deployment, save and load the image:
+
+```bash
+docker save -o wechatread-client-local.tar wechatread-client:local
+gzip -f wechatread-client-local.tar
+scp wechatread-client-local.tar.gz <host>:/tmp/
+ssh <host> 'docker load < /tmp/wechatread-client-local.tar.gz'
+```
+
+Then restart the Compose service on the target host.
+

@@ -74,7 +74,7 @@ export function SubscriptionScheduleModal({ subscription, onClose }: Props) {
     return m ? String(m.sec) : "custom";
   });
   const [customMin, setCustomMin] = useState(() =>
-    Math.max(1, Math.round(subscription.fetch_interval_sec / 60))
+    Math.max(120, Math.round(subscription.fetch_interval_sec / 60))
   );
   const [useWindow, setUseWindow] = useState(
     subscription.fetch_window_start_min >= 0 && subscription.fetch_window_end_min >= 0
@@ -89,7 +89,7 @@ export function SubscriptionScheduleModal({ subscription, onClose }: Props) {
   useEffect(() => {
     const m = FETCH_INTERVAL_PRESETS.find((p) => p.sec === subscription.fetch_interval_sec);
     setPreset(m ? String(m.sec) : "custom");
-    setCustomMin(Math.max(1, Math.round(subscription.fetch_interval_sec / 60)));
+    setCustomMin(Math.max(120, Math.round(subscription.fetch_interval_sec / 60)));
     const w =
       subscription.fetch_window_start_min >= 0 && subscription.fetch_window_end_min >= 0;
     setUseWindow(w);
@@ -105,7 +105,7 @@ export function SubscriptionScheduleModal({ subscription, onClose }: Props) {
     mutationFn: () => {
       const sec =
         preset === "custom"
-          ? Math.round(customMin) * 60
+          ? Math.max(120, Math.round(customMin)) * 60
           : parseInt(preset, 10);
       const body: Partial<Subscription> = { fetch_interval_sec: sec };
       if (useWindow) {
@@ -189,10 +189,10 @@ export function SubscriptionScheduleModal({ subscription, onClose }: Props) {
               {preset === "custom" && (
                 <input
                   type="number"
-                  min={1}
+                  min={120}
                   max={10080}
                   value={customMin}
-                  onChange={(e) => setCustomMin(parseInt(e.target.value, 10) || 1)}
+                  onChange={(e) => setCustomMin(parseInt(e.target.value, 10) || 120)}
                   className="input-editorial !rounded-xl text-lg w-full mt-2"
                   placeholder="分钟"
                 />

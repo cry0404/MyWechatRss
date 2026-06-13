@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/cry0404/MyWechatRss/internal/auth"
 	"github.com/cry0404/MyWechatRss/internal/model"
 	"github.com/cry0404/MyWechatRss/internal/store"
 )
@@ -29,6 +30,22 @@ func (h *LogsHandlers) ListLogs(c *gin.Context) {
 		logs = []*model.ArticleFetchLog{}
 	}
 	c.JSON(http.StatusOK, logs)
+}
+
+func (h *LogsHandlers) ListEvents(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	rateLimitOnly := c.Query("rate_limit_only") == "1" || c.Query("rate_limit_only") == "true"
+
+	events, err := h.Store.ListFetchEvents(c.Request.Context(), auth.CurrentUserID(c), limit, offset, rateLimitOnly)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if events == nil {
+		events = []*model.FetchEvent{}
+	}
+	c.JSON(http.StatusOK, events)
 }
 
 func (h *LogsHandlers) Stats(c *gin.Context) {
@@ -61,10 +78,10 @@ func (h *LogsHandlers) Stats(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"stats":       stats,
-		"fail_rate":   failRate,
-		"window_sec":  windowSec,
-		"since":       since,
-		"until":       until,
+		"stats":      stats,
+		"fail_rate":  failRate,
+		"window_sec": windowSec,
+		"since":      since,
+		"until":      until,
 	})
 }

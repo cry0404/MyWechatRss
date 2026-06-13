@@ -21,14 +21,10 @@ export const MINUTES = [0, 15, 30, 45];
 
 /** 下拉选项：秒 */
 export const FETCH_INTERVAL_PRESETS: { label: string; sec: number }[] = [
-  { label: "6 小时", sec: 21600 },
-  { label: "1 小时", sec: 3600 },
   { label: "2 小时", sec: 7200 },
+  { label: "6 小时", sec: 21600 },
   { label: "12 小时", sec: 43200 },
   { label: "24 小时", sec: 86400 },
-  { label: "5 分钟", sec: 300 },
-  { label: "15 分钟", sec: 900 },
-  { label: "30 分钟", sec: 1800 },
 ];
 
 function pad2(n: number) {

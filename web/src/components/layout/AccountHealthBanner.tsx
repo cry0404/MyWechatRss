@@ -15,6 +15,9 @@ export function AccountHealthBanner() {
   const hasActive = data.some((a) => a.status === "active");
   if (hasActive) return null;
   if (location.pathname.startsWith("/accounts")) return null;
+  const hasDead = data.some((a) => a.status === "dead");
+  const title = hasDead ? "所有微信读书账号已失效，抓取已暂停。" : "微信读书账号正在冷却，抓取会自动恢复。";
+  const action = hasDead ? "去重新扫码" : "查看账号状态";
 
   return (
     <div
@@ -27,10 +30,10 @@ export function AccountHealthBanner() {
       role="alert"
     >
       <span className="font-medium" style={{ color: "var(--color-danger)" }}>
-        所有微信读书账号已失效，抓取已暂停。
+        {title}
       </span>{" "}
       <Link to="/accounts" className="underline underline-offset-2" style={{ color: "var(--color-ink)" }}>
-        去重新扫码
+        {action}
       </Link>
     </div>
   );

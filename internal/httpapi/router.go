@@ -59,6 +59,7 @@ func NewRouter(
 		Articles:      artSvc,
 		FeedEncoder:   feedEnc,
 		PublicBaseURL: cfg.PublicBaseURL,
+		SummaryOnly:   cfg.ContentFetchMode == config.FetchModeSummary,
 	}
 
 	api := r.Group("/api")
@@ -92,6 +93,7 @@ func NewRouter(
 
 			logsH := &LogsHandlers{Store: st}
 			authed.GET("/fetch-logs", logsH.ListLogs)
+			authed.GET("/fetch-events", logsH.ListEvents)
 			authed.GET("/fetch-stats", logsH.Stats)
 
 			cfgH := &ConfigHandlers{Store: st}

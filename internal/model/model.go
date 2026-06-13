@@ -3,8 +3,8 @@ package model
 import "time"
 
 type User struct {
-	ID       int64  `json:"id"`
-	Username string `json:"username"`
+	ID           int64  `json:"id"`
+	Username     string `json:"username"`
 	Email        string `json:"email"`
 	PasswordHash string `json:"-"`
 	CreatedAt    int64  `json:"created_at"`
@@ -49,15 +49,16 @@ type Subscription struct {
 	Alias            string `json:"alias"`
 	MPName           string `json:"mp_name"`
 	CoverURL         string `json:"cover_url"`
-	FetchIntervalSec int64 `json:"fetch_interval_sec"`
+	FetchIntervalSec int64  `json:"fetch_interval_sec"`
 	// FetchWindowStartMin / EndMin 为当日 0..1439 的分钟，表示仅在该时段内由调度器拉取；-1 表示不限制（全天）。
 	// 与服务器本地时区一致（部署时可设 TZ）。
 	FetchWindowStartMin int64 `json:"fetch_window_start_min"`
 	FetchWindowEndMin   int64 `json:"fetch_window_end_min"`
+	NextFetchAfter      int64 `json:"next_fetch_after"`
 	LastFetchAt         int64 `json:"last_fetch_at"`
-	LastReviewTime   int64  `json:"last_review_time"`
-	CreatedAt        int64  `json:"created_at"`
-	Disabled         bool   `json:"disabled"`
+	LastReviewTime      int64 `json:"last_review_time"`
+	CreatedAt           int64 `json:"created_at"`
+	Disabled            bool  `json:"disabled"`
 }
 
 // Article 对应 articles 表。ContentHTML 允许为空（正文延迟抓取）。
@@ -86,6 +87,41 @@ type ArticleFetchLog struct {
 	CostMs    int64  `json:"cost_ms"`
 	Error     string `json:"error,omitempty"`
 	CreatedAt int64  `json:"created_at"`
+}
+
+// SubscriptionFetchLog 记录一次订阅源列表抓取，也就是 /book/articles 链路。
+type SubscriptionFetchLog struct {
+	ID                        int64  `json:"id"`
+	SubscriptionID            int64  `json:"subscription_id"`
+	AccountID                 int64  `json:"account_id"`
+	StartedAt                 int64  `json:"started_at"`
+	CostMs                    int64  `json:"cost_ms"`
+	NewCount                  int64  `json:"new_count"`
+	Error                     string `json:"error,omitempty"`
+	ErrorCode                 string `json:"error_code,omitempty"`
+	PreviousRateLimitAt       int64  `json:"previous_rate_limit_at,omitempty"`
+	SecondsSinceLastRateLimit int64  `json:"seconds_since_last_rate_limit,omitempty"`
+}
+
+// FetchEvent 是前端日志页使用的统一观察事件，覆盖订阅源抓取和正文链路抓取。
+type FetchEvent struct {
+	ID                        int64  `json:"id"`
+	EventType                 string `json:"event_type"`
+	Chain                     string `json:"chain"`
+	SubscriptionID            int64  `json:"subscription_id,omitempty"`
+	SubscriptionAlias         string `json:"subscription_alias,omitempty"`
+	MPName                    string `json:"mp_name,omitempty"`
+	ReviewID                  string `json:"review_id,omitempty"`
+	BookID                    string `json:"book_id,omitempty"`
+	AccountID                 int64  `json:"account_id,omitempty"`
+	Success                   bool   `json:"success"`
+	CostMs                    int64  `json:"cost_ms"`
+	NewCount                  int64  `json:"new_count,omitempty"`
+	Error                     string `json:"error,omitempty"`
+	ErrorCode                 string `json:"error_code,omitempty"`
+	CreatedAt                 int64  `json:"created_at"`
+	PreviousRateLimitAt       int64  `json:"previous_rate_limit_at,omitempty"`
+	SecondsSinceLastRateLimit int64  `json:"seconds_since_last_rate_limit,omitempty"`
 }
 
 // FetchStats 按 chain 汇总的抓取统计。

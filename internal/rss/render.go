@@ -63,6 +63,7 @@ type CDATA struct {
 type RenderOptions struct {
 	PublicBaseURL string // 如 https://read.example.com
 	SelfURL       string // 本 feed 自身的完整 URL，用于 atom:link
+	SummaryOnly   bool   // true 时不输出 content:encoded，即使历史文章已有全文缓存
 }
 
 func RenderSubscription(sub *model.Subscription, articles []*model.Article, opt RenderOptions) ([]byte, error) {
@@ -84,7 +85,7 @@ func RenderSubscription(sub *model.Subscription, articles []*model.Article, opt 
 		ch.Image = &Image{URL: sub.CoverURL, Title: title, Link: opt.PublicBaseURL}
 	}
 	subByBook := map[string]*model.Subscription{sub.BookID: sub}
-	ch.Items = buildItems(articles, subByBook, opt.PublicBaseURL)
+	ch.Items = buildItems(articles, subByBook, opt.PublicBaseURL, opt.SummaryOnly)
 
 	return marshalFeed(ch)
 }
@@ -112,7 +113,7 @@ func RenderAggregate(
 		LastBuild: time.Now().UTC().Format(time.RFC1123Z),
 		Generator: "wechatread-rss",
 	}
-	ch.Items = buildItems(articles, subByBook, opt.PublicBaseURL)
+	ch.Items = buildItems(articles, subByBook, opt.PublicBaseURL, opt.SummaryOnly)
 	return marshalFeed(ch)
 }
 
@@ -120,6 +121,7 @@ func buildItems(
 	articles []*model.Article,
 	subByBook map[string]*model.Subscription,
 	publicBase string,
+	summaryOnly bool,
 ) []Item {
 	items := make([]Item, 0, len(articles))
 	for _, a := range articles {
@@ -136,7 +138,7 @@ func buildItems(
 		if a.Summary != "" {
 			item.Description = html.EscapeString(a.Summary)
 		}
-		if a.ContentHTML != "" {
+		if !summaryOnly && a.ContentHTML != "" {
 			item.ContentEncoded = &CDATA{Value: a.ContentHTML}
 		}
 		items = append(items, item)

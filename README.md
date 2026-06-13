@@ -54,8 +54,8 @@ docker compose pull && docker compose up -d
 
 | 模式           | 值         | RSS 输出                                 | 请求量 | 适用场景                          |
 | ------------ | --------- | -------------------------------------- | --- | ----------------------------- |
-| **Full**（默认） | `full`    | 包含完整正文 HTML (`<content:encoded>`) + 摘要 | 高   | 阅读器内直接阅读完整文章                  |
-| **Summary**  | `summary` | 仅摘要 + 原文链接，**不抓取正文**                   | 低   | 降低风控风险、提升抓取速度；点击 RSS 条目跳转原文阅读 |
+| **Summary**（默认） | `summary` | 仅摘要 + 原文链接，**不抓取正文**                   | 低   | 降低风控风险、提升抓取速度；点击 RSS 条目跳转原文阅读 |
+| **Full**       | `full`    | 包含完整正文 HTML (`<content:encoded>`) + 摘要 | 高   | 阅读器内直接阅读完整文章                  |
 
 
 **底层逻辑：** Full 模式下，每篇文章会依次尝试三条链路抓取正文（微信读书网页端 → 公众号公开页 → App 接口），记录每条链路的耗时与成功率。Summary 模式跳过所有正文抓取，仅保存文章元数据（标题、摘要、发布时间等），显著减少对外请求量。
@@ -63,7 +63,7 @@ docker compose pull && docker compose up -d
 在 `.env` 中设置：
 
 ```bash
-CONTENT_FETCH_MODE=summary   # 或 full（不写则默认 full）
+CONTENT_FETCH_MODE=summary   # 或 full（不写则默认 summary）
 ```
 
 ---
@@ -120,7 +120,7 @@ go build -o wechatread-client ./cmd/client
 | `LISTEN_ADDR`                                                   | 监听地址                                        | `:8081`                                  |
 | `DB_PATH`                                                       | SQLite 路径；Docker 镜像内默认 `/data/app.db`（需挂载卷） | `./data/app.db`                          |
 | `PUBLIC_BASE_URL`                                               | 对外访问根 URL，RSS 与邮件内链接依赖此项                    | —                                        |
-| `CONTENT_FETCH_MODE`                                            | 正文抓取模式：`full` 或 `summary`                   | `full`                                   |
+| `CONTENT_FETCH_MODE`                                            | 正文抓取模式：`summary` 或 `full`                   | `summary`                                |
 | `FEED_ID_SALT`                                                  | RSS feedId 加盐                               | `wechatread-rss`                         |
 | `ALLOW_REGISTER`                                                | 是否开放用户注册                                    | `false`                                  |
 | `HOST_PORT`                                                     | Docker Compose 宿主机映射端口                      | `8081`                                   |
@@ -128,5 +128,4 @@ go build -o wechatread-client ./cmd/client
 | `DEFAULT_DEVICE_NAME`                                           | 微信读书侧设备名                                    | `wechatread-rss`                         |
 | `SMTP_HOST`、`SMTP_PORT`                                         | 二者齐全则启用发信；否则不发邮件                            | —                                        |
 | `SMTP_USERNAME`、`SMTP_PASSWORD`、`SMTP_FROM`、`SMTP_USE_TLS`      | 邮件细节；`SMTP_FROM` 可空，回退为用户名                  | —                                        |
-
 

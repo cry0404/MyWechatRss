@@ -99,7 +99,8 @@ func (s *Store) PickActiveAccount(ctx context.Context, userID int64) (*model.WeR
 	// 把已过期的 cooldown 自动恢复为 active，避免状态与 cooldown_until 不一致。
 	_, _ = s.db.ExecContext(ctx, `
         UPDATE weread_accounts
-        SET status = 'active', cooldown_until = 0, last_err = ''
+        SET status = 'active', cooldown_until = 0,
+            last_err = CASE WHEN last_err LIKE 'errcode=-2041%' THEN last_err ELSE '' END
         WHERE user_id = ? AND status = 'cooldown' AND cooldown_until <= ?
     `, userID, now)
 	row := s.db.QueryRowContext(ctx, `
@@ -125,7 +126,8 @@ func (s *Store) GetActiveAccountByID(ctx context.Context, userID, id int64) (*mo
 	// 把已过期的 cooldown 自动恢复为 active，避免状态与 cooldown_until 不一致。
 	_, _ = s.db.ExecContext(ctx, `
         UPDATE weread_accounts
-        SET status = 'active', cooldown_until = 0, last_err = ''
+        SET status = 'active', cooldown_until = 0,
+            last_err = CASE WHEN last_err LIKE 'errcode=-2041%' THEN last_err ELSE '' END
         WHERE user_id = ? AND id = ? AND status = 'cooldown' AND cooldown_until <= ?
     `, userID, id, now)
 	row := s.db.QueryRowContext(ctx, `
@@ -191,7 +193,8 @@ func (s *Store) CountActiveAccounts(ctx context.Context, userID int64) (int, err
 	// 而跳过该用户所有订阅，导致 PickActiveAccount 永远不被调用、恢复逻辑永不被执行的死锁。
 	_, _ = s.db.ExecContext(ctx, `
 		UPDATE weread_accounts
-		SET status = 'active', cooldown_until = 0, last_err = ''
+		SET status = 'active', cooldown_until = 0,
+			last_err = CASE WHEN last_err LIKE 'errcode=-2041%' THEN last_err ELSE '' END
 		WHERE user_id = ? AND status = 'cooldown' AND cooldown_until <= ?
 	`, userID, now)
 	var n int
@@ -200,6 +203,25 @@ func (s *Store) CountActiveAccounts(ctx context.Context, userID int64) (int, err
 		userID,
 	).Scan(&n)
 	return n, err
+}
+
+func (s *Store) HasRateLimitRecoveryAccount(ctx context.Context, userID int64) (bool, error) {
+	now := time.Now().Unix()
+	_, _ = s.db.ExecContext(ctx, `
+		UPDATE weread_accounts
+		SET status = 'active', cooldown_until = 0
+		WHERE user_id = ? AND status = 'cooldown' AND cooldown_until <= ?
+	`, userID, now)
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*)
+		FROM weread_accounts
+		WHERE user_id = ?
+		  AND status = 'active'
+		  AND cooldown_until <= ?
+		  AND last_err LIKE 'errcode=-2041%'
+	`, userID, now).Scan(&n)
+	return n > 0, err
 }
 
 // UpdateAccountCredential 续期成功后回写凭证。nil 指针表示"weread 这次没给新值，
@@ -276,7 +298,8 @@ func (s *Store) ListAllActiveAccounts(ctx context.Context) ([]*model.WeReadAccou
 	now := time.Now().Unix()
 	_, _ = s.db.ExecContext(ctx, `
 		UPDATE weread_accounts
-		SET status = 'active', cooldown_until = 0, last_err = ''
+			SET status = 'active', cooldown_until = 0,
+				last_err = CASE WHEN last_err LIKE 'errcode=-2041%' THEN last_err ELSE '' END
 		WHERE status = 'cooldown' AND cooldown_until <= ?
 	`, now)
 	rows, err := s.db.QueryContext(ctx, `

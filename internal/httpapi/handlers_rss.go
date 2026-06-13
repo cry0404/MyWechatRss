@@ -17,9 +17,13 @@ type RSSHandlers struct {
 	Articles      *articles.Service
 	FeedEncoder   *rss.FeedIDEncoder
 	PublicBaseURL string
+	SummaryOnly   bool
 }
 
-const aggregateFeedLimit = 100
+const (
+	singleFeedLimit    = 20
+	aggregateFeedLimit = 30
+)
 
 func (h *RSSHandlers) Serve(c *gin.Context) {
 	raw := c.Param("feedId")
@@ -30,7 +34,7 @@ func (h *RSSHandlers) Serve(c *gin.Context) {
 		return
 	}
 	selfURL := strings.TrimRight(h.PublicBaseURL, "/") + c.Request.URL.Path
-	opt := rss.RenderOptions{PublicBaseURL: h.PublicBaseURL, SelfURL: selfURL}
+	opt := rss.RenderOptions{PublicBaseURL: h.PublicBaseURL, SelfURL: selfURL, SummaryOnly: h.SummaryOnly}
 
 	var xml []byte
 	if subID == 0 {
@@ -50,7 +54,7 @@ func (h *RSSHandlers) renderSingle(c *gin.Context, userID, subID int64, opt rss.
 	if err != nil {
 		return nil, err
 	}
-	arts, err := h.Store.ListArticlesByBook(c.Request.Context(), sub.BookID, 50, 0)
+	arts, err := h.Store.ListArticlesByBook(c.Request.Context(), sub.BookID, singleFeedLimit, 0)
 	if err != nil {
 		return nil, err
 	}

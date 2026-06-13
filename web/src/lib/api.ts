@@ -110,6 +110,11 @@ export const api = {
   // Fetch logs / stats
   getFetchLogs: (reviewId?: string, offset?: number) =>
     request<FetchLog[]>("GET", `/api/fetch-logs?limit=50&offset=${offset || 0}${reviewId ? `&review_id=${encodeURIComponent(reviewId)}` : ""}`),
+  getFetchEvents: (offset?: number, rateLimitOnly?: boolean) =>
+    request<FetchEvent[]>(
+      "GET",
+      `/api/fetch-events?limit=50&offset=${offset || 0}${rateLimitOnly ? "&rate_limit_only=1" : ""}`
+    ),
   getFetchStats: (since?: number, until?: number, windowSec?: number) =>
     request<FetchStatsResponse>("GET", `/api/fetch-stats?since=${since || ""}&until=${until || ""}&window_sec=${windowSec || 1800}`),
 };
@@ -208,6 +213,26 @@ export interface FetchLog {
   cost_ms: number;
   error?: string;
   created_at: number;
+}
+
+export interface FetchEvent {
+  id: number;
+  event_type: "source" | "content";
+  chain: string;
+  subscription_id?: number;
+  subscription_alias?: string;
+  mp_name?: string;
+  review_id?: string;
+  book_id?: string;
+  account_id?: number;
+  success: boolean;
+  cost_ms: number;
+  new_count?: number;
+  error?: string;
+  error_code?: string;
+  created_at: number;
+  previous_rate_limit_at?: number;
+  seconds_since_last_rate_limit?: number;
 }
 
 export interface ChainStat {

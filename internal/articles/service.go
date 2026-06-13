@@ -28,6 +28,9 @@ type Service struct {
 }
 
 func NewService(st *store.Store, cr *accounts.Caller, mode string) *Service {
+	if mode == "" {
+		mode = "summary"
+	}
 	return &Service{Store: st, Caller: cr, Mode: mode}
 }
 
@@ -38,6 +41,8 @@ var (
 	incrFetchSleepMax  = 25 * time.Second
 	fetchAllSleepMin   = 30 * time.Second
 	fetchAllSleepMax   = 120 * time.Second
+	bookOpenSleepMin   = 200 * time.Millisecond
+	bookOpenSleepMax   = 800 * time.Millisecond
 	firstFetchMax      = 30
 	incrFetchPage      = 20
 )
@@ -47,24 +52,52 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 	if err != nil {
 		return 0, err
 	}
+	sourceStart := time.Now()
+	recordSource := func(accountID int64, newCount int, fetchErr error) {
+		rec := &model.SubscriptionFetchLog{
+			SubscriptionID: sub.ID,
+			AccountID:      accountID,
+			StartedAt:      sourceStart.Unix(),
+			CostMs:         time.Since(sourceStart).Milliseconds(),
+			NewCount:       int64(newCount),
+		}
+		if fetchErr != nil {
+			rec.Error = fetchErr.Error()
+		}
+		if logErr := s.Store.RecordSubscriptionFetchLog(ctx, rec); logErr != nil {
+			log.Printf("record source fetch log sub=%d account=%d: %v", sub.ID, accountID, logErr)
+		}
+	}
 	firstRun := sub.LastReviewTime == 0
 
 	acc, err := s.Store.PickActiveAccount(ctx, userID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return 0, fmt.Errorf("pick account: %w", accounts.ErrNoAccount)
+			wrapped := fmt.Errorf("pick account: %w", accounts.ErrNoAccount)
+			recordSource(0, 0, wrapped)
+			return 0, wrapped
 		}
-		return 0, fmt.Errorf("pick account: %w", err)
+		wrapped := fmt.Errorf("pick account: %w", err)
+		recordSource(0, 0, wrapped)
+		return 0, wrapped
 	}
 	preferID := acc.ID
+	recoveryProbe := isRateLimitRecoveryAccount(acc)
 
-	reviews, err := s.fetchReviewList(ctx, userID, preferID, sub.BookID, incrFetchPage, 0)
+	pageSize := incrFetchPage
+	if recoveryProbe {
+		pageSize = 5
+		log.Printf("fetch sub %d (%s): rate-limit recovery probe count=%d", sub.ID, sub.BookID, pageSize)
+	}
+
+	reviews, err := s.fetchReviewList(ctx, userID, preferID, sub.BookID, pageSize, 0, !recoveryProbe)
 	if err != nil {
+		recordSource(preferID, 0, err)
 		return 0, err
 	}
 
-	if firstRun && len(reviews) < firstFetchMax {
-		more, err := s.fetchReviewList(ctx, userID, preferID, sub.BookID, incrFetchPage, len(reviews))
+	if firstRun && !recoveryProbe && len(reviews) > 0 && len(reviews) < firstFetchMax {
+		more, err := s.fetchReviewList(ctx, userID, preferID, sub.BookID, incrFetchPage, len(reviews), false)
 		if err == nil {
 			reviews = append(reviews, more...)
 		}
@@ -81,6 +114,9 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 			continue
 		}
 		todo = append(todo, r)
+		if recoveryProbe && len(todo) >= pageSize {
+			break
+		}
 		if firstRun && len(todo) >= firstFetchMax {
 			break
 		}
@@ -129,15 +165,24 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 			newCount++
 		}
 
+		if recoveryProbe {
+			continue
+		}
 		if err := s.fetchAndStoreContent(ctx, userID, preferID, sub.BookID, r.ReviewID, r.URL); err != nil {
 			log.Printf("fetch sub %d: content %s: %v", sub.ID, r.ReviewID, err)
 		}
 	}
 
 	if err := s.Store.UpdateSubscriptionFetchState(ctx, sub.ID, time.Now().Unix(), maxTime); err != nil {
+		recordSource(preferID, newCount, err)
 		return newCount, err
 	}
+	recordSource(preferID, newCount, nil)
 	return newCount, nil
+}
+
+func isRateLimitRecoveryAccount(acc *model.WeReadAccount) bool {
+	return acc != nil && strings.HasPrefix(acc.LastErr, "errcode=-2041")
 }
 
 type reviewItem struct {
@@ -151,7 +196,12 @@ type reviewItem struct {
 	LikeNum   int64
 }
 
-func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID int64, bookID string, count, offset int) ([]reviewItem, error) {
+func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID int64, bookID string, count, offset int, warmup bool) ([]reviewItem, error) {
+	if warmup && offset == 0 {
+		if err := s.warmupBookOpen(ctx, userID, preferAccountID, bookID); err != nil {
+			return nil, err
+		}
+	}
 	res, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
 		Method: http.MethodGet,
 		Path:   "/book/articles",
@@ -212,8 +262,78 @@ func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID i
 	return items, nil
 }
 
+func (s *Service) warmupBookOpen(ctx context.Context, userID, preferAccountID int64, bookID string) error {
+	steps := []accounts.CallOptions{
+		{
+			Method: http.MethodGet,
+			Path:   "/book/info",
+			Query:  map[string]string{"bookId": bookID},
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/book/getProgress",
+			Query:  map[string]string{"bookId": bookID},
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/book/readinfo",
+			Query: map[string]string{
+				"bookId":            bookID,
+				"finishedBookCount": "1",
+				"finishedBookIndex": "1",
+				"finishedDate":      "1",
+				"readingBookCount":  "1",
+				"readingBookIndex":  "1",
+				"vid":               strconv.FormatInt(s.pickVIDForLog(ctx, userID, preferAccountID), 10),
+			},
+		},
+		{
+			Method: http.MethodGet,
+			Path:   "/book/detailinfo",
+			Query: map[string]string{
+				"bookId":    bookID,
+				"count":     "3,0,1",
+				"listtypes": "1,6,10",
+				"maxidx":    "0,0,0",
+				"synckey":   "0,0,0",
+			},
+		},
+	}
+
+	for i := range steps {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if i > 0 {
+			jitterSleep(ctx, bookOpenSleepMin, bookOpenSleepMax)
+		}
+		steps[i].PreferAccountID = preferAccountID
+		if _, err := s.Caller.Do(ctx, userID, steps[i]); err != nil {
+			log.Printf("book open warmup %s bookId=%s account=%d: %v", steps[i].Path, bookID, preferAccountID, err)
+			if errors.Is(err, accounts.ErrSearchRateLimited) ||
+				errors.Is(err, accounts.ErrHighRiskDeferred) ||
+				errors.Is(err, accounts.ErrNoAccount) {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Service) pickVIDForLog(ctx context.Context, userID, preferAccountID int64) int64 {
+	if preferAccountID > 0 {
+		if acc, err := s.Store.GetActiveAccountByID(ctx, userID, preferAccountID); err == nil {
+			return acc.VID
+		}
+	}
+	if acc, err := s.Store.PickActiveAccount(ctx, userID); err == nil {
+		return acc.VID
+	}
+	return 0
+}
+
 func (s *Service) fetchAndStoreContent(ctx context.Context, userID, preferAccountID int64, bookID, reviewID, mpURL string) error {
-	if s.Mode == "summary" {
+	if !strings.EqualFold(s.Mode, "full") {
 		return nil
 	}
 
@@ -381,6 +501,8 @@ func (s *Service) fetchContentViaWebContent(ctx context.Context, userID int64, r
 func (s *Service) fetchContentViaShareChapter(ctx context.Context, userID, preferAccountID int64, reviewID string) error {
 	// shareChapter 是最高风险的账号接口，只保留当前确认过的最小请求形态。
 	// 协议漂移时不要在同一篇文章上连续试探多组参数，避免放大风控权重。
+	s.warmupReviewOpen(ctx, userID, preferAccountID, reviewID)
+
 	attempts := []struct {
 		name  string
 		query map[string]string
@@ -432,6 +554,26 @@ func (s *Service) fetchContentViaShareChapter(ctx context.Context, userID, prefe
 	return errors.New("shareChapter 所有参数组合均失败")
 }
 
+func (s *Service) warmupReviewOpen(ctx context.Context, userID, preferAccountID int64, reviewID string) {
+	_, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
+		Method: http.MethodGet,
+		Path:   "/review/single",
+		Query: map[string]string{
+			"bookReviewCount":   "1",
+			"commentsCount":     "100",
+			"commentsDirection": "1",
+			"likesCount":        "20",
+			"likesDirection":    "0",
+			"reviewId":          reviewID,
+			"synckey":           "0",
+		},
+		PreferAccountID: preferAccountID,
+	})
+	if err != nil {
+		log.Printf("review open warmup reviewId=%s account=%d: %v", reviewID, preferAccountID, err)
+	}
+}
+
 func (s *Service) EnsureContent(ctx context.Context, userID int64, reviewID string) (*model.Article, error) {
 	a, err := s.Store.GetArticleByReviewID(ctx, reviewID)
 	if err != nil {
@@ -479,6 +621,11 @@ func (s *Service) FetchAll(ctx context.Context, userID int64) (map[string]int, e
 		if err != nil {
 			lastErr = err
 			log.Printf("fetch-all: sub %d (%s): %v", sub.ID, sub.BookID, err)
+			if errors.Is(err, accounts.ErrNoAccount) ||
+				errors.Is(err, accounts.ErrHighRiskDeferred) ||
+				errors.Is(err, accounts.ErrSearchRateLimited) {
+				break
+			}
 		}
 		result[sub.BookID] = n
 		jitterSleep(ctx, fetchAllSleepMin, fetchAllSleepMax)

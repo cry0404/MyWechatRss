@@ -22,6 +22,34 @@ function StatusText({ status }: { status: Account["status"] }) {
   );
 }
 
+function formatCooldownUntil(ts?: number) {
+  if (!ts) return "";
+  const diffSec = Math.max(0, Math.ceil((ts * 1000 - Date.now()) / 1000));
+  if (diffSec <= 0) return "即将";
+  if (diffSec < 3600) return `${Math.ceil(diffSec / 60)} 分钟后`;
+  return `${Math.ceil(diffSec / 3600)} 小时后`;
+}
+
+function AccountStateHint({ account }: { account: Account }) {
+  if (account.status === "cooldown") {
+    const until = account.cooldown_until ? ` · ${formatCooldownUntil(account.cooldown_until)}恢复` : "";
+    return (
+      <p className="text-xs mt-1 truncate" style={{ color: "var(--color-warn)" }}>
+        冷却中，会自动恢复{until}
+        {account.last_err ? ` · ${account.last_err}` : ""}
+      </p>
+    );
+  }
+  if (account.last_err && account.status === "dead") {
+    return (
+      <p className="text-xs mt-1 truncate" style={{ color: "var(--color-danger)" }}>
+        {account.last_err}
+      </p>
+    );
+  }
+  return null;
+}
+
 function QRBindModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { phase, qrImage, start, reset, deviceName, setDeviceName } = useQRLogin(open);
   const queryClient = useQueryClient();
@@ -252,11 +280,7 @@ export default function AccountsPage() {
                   {account.device_name ? ` · ${account.device_name}` : ""}
                   {account.last_ok_at ? ` · ${formatRelativeTime(account.last_ok_at)}` : ""}
                 </p>
-                {account.last_err && account.status === "dead" && (
-                  <p className="text-xs mt-1 truncate" style={{ color: "var(--color-danger)" }}>
-                    {account.last_err}
-                  </p>
-                )}
+                <AccountStateHint account={account} />
               </div>
               <button
                 type="button"

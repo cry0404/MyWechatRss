@@ -51,7 +51,20 @@ func applyMigrations(db *sql.DB) error {
 		`ALTER TABLE articles ADD COLUMN url TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE subscriptions ADD COLUMN fetch_window_start_min INTEGER NOT NULL DEFAULT -1`,
 		`ALTER TABLE subscriptions ADD COLUMN fetch_window_end_min INTEGER NOT NULL DEFAULT -1`,
+		`ALTER TABLE subscriptions ADD COLUMN next_fetch_after INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE fetch_logs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE fetch_logs ADD COLUMN previous_rate_limit_at INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE fetch_logs ADD COLUMN seconds_since_last_rate_limit INTEGER NOT NULL DEFAULT 0`,
+		`UPDATE fetch_logs SET error_code = '-2041' WHERE error_code = '' AND error LIKE '%-2041%'`,
+		`CREATE INDEX IF NOT EXISTS idx_fetch_logs_started ON fetch_logs(started_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_fetch_logs_error_code ON fetch_logs(error_code, started_at)`,
 		`CREATE TABLE IF NOT EXISTS site_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`UPDATE subscriptions SET fetch_interval_sec = 7200 WHERE fetch_interval_sec > 0 AND fetch_interval_sec < 7200`,
+		`UPDATE weread_accounts
+		 SET cooldown_until = CAST(strftime('%s', 'now') AS INTEGER) + 2700
+		 WHERE status = 'cooldown'
+		   AND last_err LIKE 'errcode=-2041%'
+		   AND cooldown_until > CAST(strftime('%s', 'now') AS INTEGER) + 2700`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
