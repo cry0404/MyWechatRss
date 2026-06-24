@@ -162,6 +162,7 @@ export interface Subscription {
   fetch_window_end_min: number;
   last_fetch_at?: number;
   last_review_time?: number;
+  article_synckey?: number;
   created_at: number;
   disabled: boolean;
   feed_id: string;

@@ -52,6 +52,8 @@ func applyMigrations(db *sql.DB) error {
 		`ALTER TABLE subscriptions ADD COLUMN fetch_window_start_min INTEGER NOT NULL DEFAULT -1`,
 		`ALTER TABLE subscriptions ADD COLUMN fetch_window_end_min INTEGER NOT NULL DEFAULT -1`,
 		`ALTER TABLE subscriptions ADD COLUMN next_fetch_after INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE subscriptions ADD COLUMN article_synckey INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE fetch_logs ADD COLUMN chain TEXT NOT NULL DEFAULT 'source'`,
 		`ALTER TABLE fetch_logs ADD COLUMN error_code TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE fetch_logs ADD COLUMN previous_rate_limit_at INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE fetch_logs ADD COLUMN seconds_since_last_rate_limit INTEGER NOT NULL DEFAULT 0`,

@@ -15,17 +15,39 @@
 
 ```bash
 git clone https://github.com/cry0404/MyWechatRss.git
-cd MyWechatRss/client
+cd MyWechatRss
 cp .env.example .env
 ```
 
-**配置：** 编辑 `.env`（普通文本编辑器即可）。
+**快速生成本机配置模板：**
+
+```bash
+APP_SECRET="$(openssl rand -hex 32)"
+JWT_SECRET="$(openssl rand -hex 32)"
+cat > .env <<EOF
+APP_SECRET=$APP_SECRET
+JWT_SECRET=$JWT_SECRET
+UPSTREAM_BASE_URL=<UPSTREAM_BASE_URL>
+UPSTREAM_API_KEY_ID=<UPSTREAM_API_KEY_ID>
+UPSTREAM_API_SECRET=<UPSTREAM_API_SECRET>
+PUBLIC_BASE_URL=http://127.0.0.1:8081
+BOOTSTRAP_USERNAME=admin
+BOOTSTRAP_PASSWORD=changeme
+BOOTSTRAP_EMAIL=you@example.com
+CONTENT_FETCH_MODE=summary
+HOST_PORT=8081
+EOF
+```
+
+然后把 `.env` 里的 `<UPSTREAM_...>` 占位符替换成你的上游服务配置。公网部署时，把 `PUBLIC_BASE_URL` 改成实际访问地址，例如 `https://rss.example.com`。
+
+**手动配置说明：**
 
 1. **随机密钥**（各至少 16 个字符，且互不相同）。在终端执行两次下面命令，把输出分别填到 `APP_SECRET` 和 `JWT_SECRET`：
   ```bash
    openssl rand -hex 32
   ```
-2. **上游服务**：向 Cry 索取并填写 `UPSTREAM_BASE_URL`、`UPSTREAM_API_KEY_ID`、`UPSTREAM_API_SECRET`。(baseurl 大概率为 [https://wechat.cry4o4n0tfound.cc](https://wechat.cry4o4n0tfound.cc))
+2. **上游服务**：填写 `UPSTREAM_BASE_URL`、`UPSTREAM_API_KEY_ID`、`UPSTREAM_API_SECRET`。这些值由你的私有 WeRead 协议服务提供，公开文档里不要写真实值。
 3. **你的网站地址**：`PUBLIC_BASE_URL` 填你实际用来访问本服务的地址（含 `http` 或 `https`，**不要**末尾斜杠）。例如本机试跑可用 `http://127.0.0.1:8081`；公网域名则填 `https://rss.example.com`。
 4. **首次管理员**：保留或修改 `BOOTSTRAP_`*。数据库里还没有任何用户时，会用这组账号创建第一个管理员（仅一次）。**登录后请到「设置」里修改密码。**
 
@@ -33,6 +55,7 @@ cp .env.example .env
 
 ```bash
 docker compose up -d
+docker compose logs -f app
 ```
 
 浏览器打开你在 `PUBLIC_BASE_URL` 里填的地址即可。数据文件在项目下的 `data/` 目录（已挂载到容器内 `/data`）。
@@ -44,6 +67,18 @@ docker compose pull && docker compose up -d
 ```
 
 **官方镜像：** `ghcr.io/cry0404/MyWechatRss`
+
+**单机本地镜像部署：** 如果你需要在本机打包镜像并上传到一台已配置 Docker Compose 的服务器，可以使用仓库里的 `scripts/deploy-single-server.sh`：
+
+```bash
+SSH_CONTEXT=<ssh-host> \
+REMOTE_WORK_DIR=/opt/wechatread \
+IMAGE_NAME=wechatread-client:local \
+FORCE=1 \
+./scripts/deploy-single-server.sh
+```
+
+远端 compose 文件中 client 服务的镜像会被更新为 `IMAGE_NAME`。默认构建平台为 `linux/amd64`，可通过 `BUILD_PLATFORM=linux/arm64` 覆盖。
 
 ---
 
@@ -83,13 +118,20 @@ CONTENT_FETCH_MODE=summary   # 或 full（不写则默认 summary）
 
 ## 日志与链路统计
 
-前端「日志」页面提供正文抓取的可观测性：
+前端「日志」页面提供订阅源列表与正文抓取的可观测性：
 
-- **概览卡片**：今日成功率、近 30 分钟失败率、活跃链路数
-- **链路统计（24h）**：按 chain（web / mp / shareChapter）汇总的成功率和平均耗时
-- **最近记录**：单条抓取记录，支持 **全部 / 失败 / 成功** 筛选，失败记录可展开查看完整错误信息，Review ID 可一键复制
+- **订阅源列表链路**：优先使用微信读书 Web 接口 `web/mp/articles` 获取公众号文章列表，避免调度刷新依赖 App `/book/articles`。
+- **正文链路**：Full 模式下按 `web` → `mp` → `shareChapter` 依次尝试抓取正文。
+- **-2041 定位**：日志会记录发生风控的订阅源、账号、链路、错误码，以及距离上一次 `-2041` 的间隔。
+- **最近记录**：单条抓取记录支持 **全部 / -2041 / 失败 / 成功** 筛选，失败记录可展开查看完整错误信息，Review ID 或 Book ID 可一键复制。
 
-> 注：日志数据来自 `article_fetch_logs` 表，仅记录正文抓取阶段。Summary 模式下无正文抓取，因此不会产生日志记录。
+订阅源列表日志来自 `fetch_logs` 表，正文抓取日志来自 `article_fetch_logs` 表。Summary 模式仍会记录订阅源列表抓取日志，但不会产生正文抓取日志。
+
+---
+
+## 添加订阅
+
+在「订阅」页面点击添加，可以继续通过搜索框搜索公众号名称。若你已经知道公众号的 `MP_WXS_...` Book ID，也可以直接把它粘贴到搜索框中回车，系统会用 book info 查询公众号信息并生成候选项，减少对搜索接口的依赖。
 
 ---
 
@@ -99,7 +141,7 @@ CONTENT_FETCH_MODE=summary   # 或 full（不写则默认 summary）
 
 ```bash
 git clone https://github.com/cry0404/MyWechatRss.git
-cd MyWechatRss/client
+cd MyWechatRss
 cd web && npm ci && npm run build && cd ..
 go build -o wechatread-client ./cmd/client
 ```
@@ -128,4 +170,3 @@ go build -o wechatread-client ./cmd/client
 | `DEFAULT_DEVICE_NAME`                                           | 微信读书侧设备名                                    | `wechatread-rss`                         |
 | `SMTP_HOST`、`SMTP_PORT`                                         | 二者齐全则启用发信；否则不发邮件                            | —                                        |
 | `SMTP_USERNAME`、`SMTP_PASSWORD`、`SMTP_FROM`、`SMTP_USE_TLS`      | 邮件细节；`SMTP_FROM` 可空，回退为用户名                  | —                                        |
-

@@ -13,6 +13,9 @@ func (s *Store) RecordSubscriptionFetchLog(ctx context.Context, log *model.Subsc
 	if log.StartedAt == 0 {
 		log.StartedAt = time.Now().Unix()
 	}
+	if log.Chain == "" {
+		log.Chain = "source"
+	}
 	if log.ErrorCode == "" {
 		log.ErrorCode = detectErrorCode(log.Error)
 	}
@@ -29,10 +32,10 @@ func (s *Store) RecordSubscriptionFetchLog(ctx context.Context, log *model.Subsc
 
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO fetch_logs
-			(subscription_id, account_id, started_at, cost_ms, new_count, error, error_code,
+			(chain, subscription_id, account_id, started_at, cost_ms, new_count, error, error_code,
 			 previous_rate_limit_at, seconds_since_last_rate_limit)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, log.SubscriptionID, log.AccountID, log.StartedAt, log.CostMs, log.NewCount, log.Error, log.ErrorCode,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, log.Chain, log.SubscriptionID, log.AccountID, log.StartedAt, log.CostMs, log.NewCount, log.Error, log.ErrorCode,
 		log.PreviousRateLimitAt, log.SecondsSinceLastRateLimit)
 	if err != nil {
 		return err
@@ -84,7 +87,7 @@ func (s *Store) ListFetchEvents(ctx context.Context, userID int64, limit, offset
 			SELECT
 				fl.id AS id,
 				'source' AS event_type,
-				'source' AS chain,
+				fl.chain AS chain,
 				fl.subscription_id AS subscription_id,
 				s.alias AS subscription_alias,
 				s.mp_name AS mp_name,

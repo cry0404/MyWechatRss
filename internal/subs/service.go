@@ -37,6 +37,26 @@ func (s *Service) Search(ctx context.Context, userID int64, keyword string) ([]S
 	if keyword == "" {
 		return nil, errors.New("keyword required")
 	}
+	if strings.HasPrefix(keyword, mpBookIDPrefix) {
+		info, err := s.fetchBookInfo(ctx, userID, keyword)
+		if err != nil {
+			return nil, err
+		}
+		title := strings.TrimSpace(info.Title)
+		if title == "" {
+			title = keyword
+		}
+		author := strings.TrimSpace(info.Author)
+		if author == "" {
+			author = "公众号"
+		}
+		return []SearchResultItem{{
+			BookID: keyword,
+			Title:  title,
+			Author: author,
+			Cover:  info.Cover,
+		}}, nil
+	}
 	initial, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
 		Method: http.MethodGet,
 		Path:   "/store/search",
@@ -184,8 +204,9 @@ func (s *Service) Create(ctx context.Context, userID int64, bookID, alias string
 }
 
 type bookInfo struct {
-	Title string `json:"title"`
-	Cover string `json:"cover"`
+	Title  string `json:"title"`
+	Author string `json:"author"`
+	Cover  string `json:"cover"`
 }
 
 func (s *Service) fetchBookInfo(ctx context.Context, userID int64, bookID string) (*bookInfo, error) {

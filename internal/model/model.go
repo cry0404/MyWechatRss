@@ -57,6 +57,7 @@ type Subscription struct {
 	NextFetchAfter      int64 `json:"next_fetch_after"`
 	LastFetchAt         int64 `json:"last_fetch_at"`
 	LastReviewTime      int64 `json:"last_review_time"`
+	ArticleSynckey      int64 `json:"article_synckey"`
 	CreatedAt           int64 `json:"created_at"`
 	Disabled            bool  `json:"disabled"`
 }
@@ -89,9 +90,10 @@ type ArticleFetchLog struct {
 	CreatedAt int64  `json:"created_at"`
 }
 
-// SubscriptionFetchLog 记录一次订阅源列表抓取，也就是 /book/articles 链路。
+// SubscriptionFetchLog 记录一次订阅源列表抓取，Chain 标出具体列表来源。
 type SubscriptionFetchLog struct {
 	ID                        int64  `json:"id"`
+	Chain                     string `json:"chain"`
 	SubscriptionID            int64  `json:"subscription_id"`
 	AccountID                 int64  `json:"account_id"`
 	StartedAt                 int64  `json:"started_at"`

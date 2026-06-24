@@ -2,7 +2,6 @@ package articles
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -14,7 +13,6 @@ import (
 	"github.com/cry0404/MyWechatRss/internal/crypto"
 	"github.com/cry0404/MyWechatRss/internal/model"
 	"github.com/cry0404/MyWechatRss/internal/store"
-	"github.com/cry0404/MyWechatRss/internal/upstream"
 )
 
 func TestSchedulerPersistsOverflowDeferral(t *testing.T) {
@@ -22,29 +20,21 @@ func TestSchedulerPersistsOverflowDeferral(t *testing.T) {
 	st, user := newSchedulerTestStore(t, 5)
 	var articleCalls int32
 
-	up := articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/proxy/weread/call" {
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
 			http.NotFound(w, r)
 			return
 		}
-		var req upstream.CallReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode call req: %v", err)
-		}
-		if req.Path == "/book/articles" && req.Query["offset"] == "0" {
+		if r.URL.Query().Get("offset") == "0" {
 			atomic.AddInt32(&articleCalls, 1)
 		}
-		writeArticleJSON(t, w, upstream.CallResp{
-			Status:  http.StatusOK,
-			Headers: map[string]string{},
-			Body:    json.RawMessage(`{"errcode":0,"reviews":[]}`),
-		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"reviews":[]}`))
 	})
 
 	svc := &Service{
-		Store:  st,
-		Caller: &accounts.Caller{Store: st, Upstream: up},
-		Mode:   "summary",
+		Store: st,
+		Mode:  "summary",
 	}
 	scheduler := NewScheduler(st, svc)
 	scheduler.InterSubSleepMin = 0
@@ -119,36 +109,20 @@ func TestSchedulerDefersDueBacklogAfterRateLimit(t *testing.T) {
 	var articleCalls int32
 	var attemptedBookID string
 
-	up := articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/proxy/weread/call" {
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
 			http.NotFound(w, r)
 			return
 		}
-		var req upstream.CallReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode call req: %v", err)
-		}
-		if req.Path == "/book/articles" {
-			atomic.AddInt32(&articleCalls, 1)
-			attemptedBookID = req.Query["bookId"]
-			writeArticleJSON(t, w, upstream.CallResp{
-				Status:  http.StatusOK,
-				Headers: map[string]string{},
-				Body:    json.RawMessage(`{"errcode":-2041,"errmsg":"-2041"}`),
-			})
-			return
-		}
-		writeArticleJSON(t, w, upstream.CallResp{
-			Status:  http.StatusOK,
-			Headers: map[string]string{},
-			Body:    json.RawMessage(`{"errcode":0}`),
-		})
+		atomic.AddInt32(&articleCalls, 1)
+		attemptedBookID = r.URL.Query().Get("bookId")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errcode":-2041,"errmsg":"-2041"}`))
 	})
 
 	svc := &Service{
-		Store:  st,
-		Caller: &accounts.Caller{Store: st, Upstream: up},
-		Mode:   "summary",
+		Store: st,
+		Mode:  "summary",
 	}
 	scheduler := NewScheduler(st, svc)
 	scheduler.InterSubSleepMin = 0
@@ -241,29 +215,19 @@ func TestSchedulerRunsSingleProbeWhileRecoveringFromRateLimit(t *testing.T) {
 	}
 	var articleCalls int32
 
-	up := articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/proxy/weread/call" {
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
 			http.NotFound(w, r)
 			return
 		}
-		var req upstream.CallReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode call req: %v", err)
-		}
-		if req.Path == "/book/articles" {
-			atomic.AddInt32(&articleCalls, 1)
-		}
-		writeArticleJSON(t, w, upstream.CallResp{
-			Status:  http.StatusOK,
-			Headers: map[string]string{},
-			Body:    json.RawMessage(`{"errcode":0,"reviews":[]}`),
-		})
+		atomic.AddInt32(&articleCalls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"reviews":[]}`))
 	})
 
 	svc := &Service{
-		Store:  st,
-		Caller: &accounts.Caller{Store: st, Upstream: up},
-		Mode:   "summary",
+		Store: st,
+		Mode:  "summary",
 	}
 	scheduler := NewScheduler(st, svc)
 	scheduler.InterSubSleepMin = 0
@@ -290,20 +254,18 @@ func TestFetchAllStopsAfterRateLimit(t *testing.T) {
 	ctx := context.Background()
 	st, user := newSchedulerTestStore(t, 3)
 	var calls int32
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&calls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"errcode":-2041,"errmsg":"-2041"}`))
+	})
 	svc := &Service{
 		Store: st,
-		Caller: &accounts.Caller{
-			Store: st,
-			Upstream: articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
-				atomic.AddInt32(&calls, 1)
-				writeArticleJSON(t, w, upstream.CallResp{
-					Status:  http.StatusOK,
-					Headers: map[string]string{},
-					Body:    json.RawMessage(`{"errcode":-2041,"errmsg":"-2041"}`),
-				})
-			}),
-		},
-		Mode: "summary",
+		Mode:  "summary",
 	}
 
 	_, err := svc.FetchAll(ctx, user.ID)

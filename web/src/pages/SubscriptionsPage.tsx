@@ -232,7 +232,7 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
             <>
               <input
                 type="text"
-                placeholder="搜索公众号名称，回车"
+                placeholder="搜索公众号名称或粘贴 MP_WXS_ ID，回车"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => {

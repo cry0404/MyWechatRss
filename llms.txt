@@ -31,7 +31,7 @@ openssl rand -hex 32
 
 ## Quick Docker deployment
 
-1. Clone the repository.
+1. Clone the client repository.
 
 ```bash
 git clone git@github.com:cry0404/MyWechatRss.git
@@ -44,13 +44,22 @@ cd MyWechatRss
 cp .env.example .env
 ```
 
-3. Fill `.env` with deployment-specific values.
+3. Fill `.env` with deployment-specific values. For a fresh install, generate
+safe local secrets first:
+
+```bash
+openssl rand -hex 32
+openssl rand -hex 32
+```
+
+Then write the generated values into `.env` and leave service-specific values as
+placeholders until the operator replaces them:
 
 Required values:
 
 ```bash
-APP_SECRET=<random 32-byte hex>
-JWT_SECRET=<another random 32-byte hex>
+APP_SECRET=<first random hex value>
+JWT_SECRET=<second random hex value>
 UPSTREAM_BASE_URL=<private protocol server base URL>
 UPSTREAM_API_KEY_ID=<configured key id on the protocol server>
 UPSTREAM_API_SECRET=<matching HMAC secret>
@@ -101,6 +110,23 @@ WeRead account by QR code, then create subscriptions.
 - If an external reader still shows old content, force-refresh the feed or
   remove and re-add it. Large older feeds may have been cached or timed out.
 
+## Subscription discovery behavior
+
+- Normal scheduled list refresh uses the WeRead Web endpoint
+  `/web/mp/articles` with the existing `wr_vid` / `wr_skey` cookie pair.
+- Do not reintroduce App `/book/articles` as the default scheduled list source
+  unless there is explicit evidence that the Web endpoint no longer works.
+- The search box is still available for adding subscriptions through
+  `/store/search`.
+- If the operator already knows a `MP_WXS_...` Book ID, the search endpoint in
+  this client accepts it directly and uses book info to build a subscription
+  candidate. This reduces reliance on the search box for known accounts.
+- `fetch_logs.chain` distinguishes source-list chains such as
+  `web/mp/articles`; `article_fetch_logs.chain` distinguishes content chains
+  such as `web`, `mp`, and `shareChapter`.
+- `fetch_logs` records `-2041` intervals so operators can see which
+  subscription and chain triggered rate limiting.
+
 ## Operational notes
 
 - SQLite is stored under `./data` in Docker. Back up this directory before host
@@ -116,7 +142,7 @@ WeRead account by QR code, then create subscriptions.
 ## Local build and test
 
 ```bash
-go test ./internal/...
+go test ./...
 cd web && npm ci && npm run build
 cd ..
 go build -o wechatread-client ./cmd/client
@@ -130,7 +156,31 @@ Run locally with environment variables matching `.env.example`.
 docker buildx build --platform linux/amd64 -t wechatread-client:local .
 ```
 
-For a single-server manual deployment, save and load the image:
+For a single-server manual deployment, prefer
+`scripts/deploy-single-server.sh`. It builds a local image, uploads it by SSH,
+loads it on the target host, updates the image name in the target Compose file,
+and restarts the client service.
+
+```bash
+SSH_CONTEXT=<ssh-host> \
+REMOTE_WORK_DIR=/opt/wechatread \
+IMAGE_NAME=wechatread-client:local \
+FORCE=1 \
+./scripts/deploy-single-server.sh
+```
+
+Default deployment script values:
+
+```bash
+REMOTE_WORK_DIR=/opt/wechatread
+IMAGE_NAME=wechatread-client:local
+SERVICE_NAME=client
+BUILD_PLATFORM=linux/amd64
+LOCAL_TARBALL=/tmp/wechatread-client-local.tar.gz
+REMOTE_TARBALL=/tmp/wechatread-client-local.tar.gz
+```
+
+If not using `scripts/deploy-single-server.sh`, save and load the image manually:
 
 ```bash
 docker save -o wechatread-client-local.tar wechatread-client:local
@@ -139,5 +189,22 @@ scp wechatread-client-local.tar.gz <host>:/tmp/
 ssh <host> 'docker load < /tmp/wechatread-client-local.tar.gz'
 ```
 
-Then restart the Compose service on the target host.
+Then update the target Compose service image to `wechatread-client:local` and
+restart the client service.
 
+## Verification after deploy
+
+Run these checks on the target host:
+
+```bash
+docker compose ps
+docker compose logs --tail=120 client
+curl -fsS http://127.0.0.1:${HOST_PORT:-8081}/health
+```
+
+Expected signals:
+
+- The client container is `Up`.
+- Health returns `{"ok":true}`.
+- Recent source-list logs use `web/mp/articles`.
+- WeRead accounts are not stuck in `cooldown`.

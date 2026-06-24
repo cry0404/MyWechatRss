@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     next_fetch_after    INTEGER NOT NULL DEFAULT 0,
     last_fetch_at       INTEGER NOT NULL DEFAULT 0,
     last_review_time    INTEGER NOT NULL DEFAULT 0,
+    article_synckey     INTEGER NOT NULL DEFAULT 0,
     created_at          INTEGER NOT NULL,
     disabled            INTEGER NOT NULL DEFAULT 0,
     UNIQUE (user_id, book_id),
@@ -69,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_articles_book_publish
 
 CREATE TABLE IF NOT EXISTS fetch_logs (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    chain            TEXT    NOT NULL DEFAULT 'source',
     subscription_id  INTEGER NOT NULL,
     account_id       INTEGER NOT NULL,
     started_at       INTEGER NOT NULL,

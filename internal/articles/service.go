@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -47,15 +48,21 @@ var (
 	incrFetchPage      = 20
 )
 
+const articleListChainWeb = "web/mp/articles"
+
 func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, error) {
 	sub, err := s.Store.GetSubscription(ctx, userID, subID)
 	if err != nil {
 		return 0, err
 	}
 	sourceStart := time.Now()
-	recordSource := func(accountID int64, newCount int, fetchErr error) {
+	recordSource := func(accountID int64, chain string, newCount int, fetchErr error) {
+		if chain == "" {
+			chain = "source"
+		}
 		rec := &model.SubscriptionFetchLog{
 			SubscriptionID: sub.ID,
+			Chain:          chain,
 			AccountID:      accountID,
 			StartedAt:      sourceStart.Unix(),
 			CostMs:         time.Since(sourceStart).Milliseconds(),
@@ -74,11 +81,11 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			wrapped := fmt.Errorf("pick account: %w", accounts.ErrNoAccount)
-			recordSource(0, 0, wrapped)
+			recordSource(0, "", 0, wrapped)
 			return 0, wrapped
 		}
 		wrapped := fmt.Errorf("pick account: %w", err)
-		recordSource(0, 0, wrapped)
+		recordSource(0, "", 0, wrapped)
 		return 0, wrapped
 	}
 	preferID := acc.ID
@@ -90,16 +97,23 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 		log.Printf("fetch sub %d (%s): rate-limit recovery probe count=%d", sub.ID, sub.BookID, pageSize)
 	}
 
-	reviews, err := s.fetchReviewList(ctx, userID, preferID, sub.BookID, pageSize, 0, !recoveryProbe)
+	listChain := articleListChainWeb
+	listRes, err := s.fetchReviewList(ctx, userID, preferID, sub, pageSize, 0)
 	if err != nil {
-		recordSource(preferID, 0, err)
+		recordSource(preferID, listChain, 0, err)
 		return 0, err
 	}
+	listChain = listRes.Chain
+	articleSynckey := listRes.Synckey
+	reviews := listRes.Items
 
 	if firstRun && !recoveryProbe && len(reviews) > 0 && len(reviews) < firstFetchMax {
-		more, err := s.fetchReviewList(ctx, userID, preferID, sub.BookID, incrFetchPage, len(reviews), false)
+		more, err := s.fetchReviewList(ctx, userID, preferID, sub, incrFetchPage, len(reviews))
 		if err == nil {
-			reviews = append(reviews, more...)
+			reviews = append(reviews, more.Items...)
+			if more.Synckey > 0 {
+				articleSynckey = more.Synckey
+			}
 		}
 	}
 
@@ -173,11 +187,11 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 		}
 	}
 
-	if err := s.Store.UpdateSubscriptionFetchState(ctx, sub.ID, time.Now().Unix(), maxTime); err != nil {
-		recordSource(preferID, newCount, err)
+	if err := s.Store.UpdateSubscriptionFetchState(ctx, sub.ID, time.Now().Unix(), maxTime, articleSynckey); err != nil {
+		recordSource(preferID, listChain, newCount, err)
 		return newCount, err
 	}
-	recordSource(preferID, newCount, nil)
+	recordSource(preferID, listChain, newCount, nil)
 	return newCount, nil
 }
 
@@ -196,70 +210,200 @@ type reviewItem struct {
 	LikeNum   int64
 }
 
-func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID int64, bookID string, count, offset int, warmup bool) ([]reviewItem, error) {
-	if warmup && offset == 0 {
-		if err := s.warmupBookOpen(ctx, userID, preferAccountID, bookID); err != nil {
-			return nil, err
-		}
-	}
-	res, err := s.Caller.Do(ctx, userID, accounts.CallOptions{
-		Method: http.MethodGet,
-		Path:   "/book/articles",
-		Query: map[string]string{
-			"bookId":  bookID,
-			"count":   strconv.Itoa(count),
-			"offset":  strconv.Itoa(offset),
-			"synckey": "0",
-			"version": "2",
-		},
-		PreferAccountID: preferAccountID,
-	})
+type reviewListResult struct {
+	Items   []reviewItem
+	Chain   string
+	Synckey int64
+}
+
+func (s *Service) fetchReviewList(ctx context.Context, userID, preferAccountID int64, sub *model.Subscription, count, offset int) (*reviewListResult, error) {
+	return s.fetchReviewListViaWeb(ctx, userID, preferAccountID, sub.BookID, sub.ArticleSynckey, count, offset)
+}
+
+func (s *Service) fetchReviewListViaWeb(ctx context.Context, userID, preferAccountID int64, bookID string, synckey int64, count, offset int) (*reviewListResult, error) {
+	acc, err := s.pickActiveAccountForWeb(ctx, userID, preferAccountID)
 	if err != nil {
 		return nil, err
 	}
 
-	var raw struct {
-		Reviews []struct {
-			SubReviews []struct {
-				Review struct {
-					ReviewID   string                 `json:"reviewId"`
-					CreateTime int64                  `json:"createTime"`
-					MpInfo     map[string]interface{} `json:"mpInfo"`
-				} `json:"review"`
-			} `json:"subReviews"`
-		} `json:"reviews"`
+	endpoint, err := url.Parse(strings.TrimRight(wereadWebBaseURL, "/") + "/web/mp/articles")
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(res.RawJSON, &raw); err != nil {
-		return nil, fmt.Errorf("parse /book/articles: %w", err)
+	query := endpoint.Query()
+	query.Set("bookId", bookID)
+	query.Set("offset", strconv.Itoa(offset))
+	if count > 0 {
+		query.Set("count", strconv.Itoa(count))
+	}
+	if synckey > 0 && offset == 0 {
+		query.Set("synckey", strconv.FormatInt(synckey, 10))
+	}
+	endpoint.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", mpDesktopUA)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9")
+	req.Header.Set("Referer", "https://weread.qq.com/web/reader/"+bookID)
+	req.Header.Set("Cookie", fmt.Sprintf("wr_vid=%d; wr_skey=%s", acc.VID, acc.SKey))
+
+	resp, err := webContentClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%s request: %w", articleListChainWeb, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, mpMaxBodyBytes))
+	if err != nil {
+		return nil, fmt.Errorf("%s read body: %w", articleListChainWeb, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s http %d: %s", articleListChainWeb, resp.StatusCode, truncateForArticleLog(body, 256))
+	}
+	if err := handleWebArticleListErr(ctx, s.Store, acc, body); err != nil {
+		return nil, err
 	}
 
-	if len(raw.Reviews) > 0 && len(raw.Reviews[0].SubReviews) > 0 {
-		r0 := raw.Reviews[0].SubReviews[0].Review
-		dumpMpInfoOnce(r0.ReviewID, r0.CreateTime, r0.MpInfo)
+	items, nextSynckey, err := parseArticleListResponse(body, articleListChainWeb)
+	if err != nil {
+		return nil, err
+	}
+	if count > 0 && len(items) > count {
+		items = items[:count]
+	}
+	return &reviewListResult{Items: items, Chain: articleListChainWeb, Synckey: nextSynckey}, nil
+}
+
+func (s *Service) pickActiveAccountForWeb(ctx context.Context, userID, preferAccountID int64) (*model.WeReadAccount, error) {
+	if preferAccountID > 0 {
+		acc, err := s.Store.GetActiveAccountByID(ctx, userID, preferAccountID)
+		if err == nil {
+			return acc, nil
+		}
+		if !errors.Is(err, store.ErrNotFound) {
+			return nil, err
+		}
+	}
+	acc, err := s.Store.PickActiveAccount(ctx, userID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, accounts.ErrNoAccount
+		}
+		return nil, err
+	}
+	return acc, nil
+}
+
+func handleWebArticleListErr(ctx context.Context, st *store.Store, acc *model.WeReadAccount, body []byte) error {
+	var hdr struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+	}
+	if err := json.Unmarshal(body, &hdr); err != nil {
+		return nil
+	}
+	if hdr.ErrCode == 0 {
+		return nil
+	}
+	msg := hdr.ErrMsg
+	if msg == "" {
+		msg = strconv.Itoa(hdr.ErrCode)
+	}
+	switch hdr.ErrCode {
+	case -2041:
+		reason := "errcode=-2041 " + msg
+		_ = st.MarkAccountCooldown(ctx, acc.ID, reason, accounts.RateLimitCooldownDuration)
+		log.Printf("[web/mp/articles] -2041 search-rate-limit account=%d vid=%d errmsg=%q -> cooldown", acc.ID, acc.VID, msg)
+		return fmt.Errorf("%w: account %d path=/%s: %s", accounts.ErrSearchRateLimited, acc.ID, articleListChainWeb, msg)
+	case -2010:
+		reason := "errcode=-2010 " + msg
+		_ = st.MarkAccountCooldown(ctx, acc.ID, reason, accounts.CooldownDuration)
+		return fmt.Errorf("account %d cooldown: %s", acc.ID, reason)
+	default:
+		return fmt.Errorf("%s errcode=%d errmsg=%s", articleListChainWeb, hdr.ErrCode, msg)
+	}
+}
+
+type articleListEnvelope struct {
+	ErrCode int    `json:"errcode"`
+	ErrMsg  string `json:"errmsg"`
+	Synckey int64  `json:"synckey"`
+	Reviews []struct {
+		CreateTime int64 `json:"createTime"`
+		SubReviews []struct {
+			ReviewID string `json:"reviewId"`
+			Review   struct {
+				ReviewID   string `json:"reviewId"`
+				CreateTime int64  `json:"createTime"`
+				Content    string `json:"content"`
+				MpInfo     struct {
+					OriginalID string `json:"originalId"`
+					Title      string `json:"title"`
+					Content    string `json:"content"`
+					PicURL     string `json:"pic_url"`
+					Time       int64  `json:"time"`
+					ReadNum    int64  `json:"readNum"`
+					LikeNum    int64  `json:"likeNum"`
+				} `json:"mpInfo"`
+			} `json:"review"`
+		} `json:"subReviews"`
+	} `json:"reviews"`
+}
+
+func parseArticleListResponse(raw []byte, chain string) ([]reviewItem, int64, error) {
+	var envelope articleListEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, 0, fmt.Errorf("parse %s: %w", chain, err)
+	}
+	if envelope.ErrCode != 0 {
+		return nil, 0, fmt.Errorf("%s errcode=%d errmsg=%s", chain, envelope.ErrCode, envelope.ErrMsg)
 	}
 
 	var items []reviewItem
-	for _, review := range raw.Reviews {
-		for _, sub := range review.SubReviews {
+	for _, group := range envelope.Reviews {
+		for _, sub := range group.SubReviews {
 			r := sub.Review
 			mp := r.MpInfo
-			publishAt := asInt64(mp["time"])
+			reviewID := r.ReviewID
+			if reviewID == "" {
+				reviewID = sub.ReviewID
+			}
+			publishAt := mp.Time
 			if publishAt == 0 {
 				publishAt = r.CreateTime
 			}
+			if publishAt == 0 {
+				publishAt = group.CreateTime
+			}
+			summary := mp.Content
+			if summary == "" {
+				summary = r.Content
+			}
 			items = append(items, reviewItem{
-				ReviewID:  r.ReviewID,
-				Title:     asString(mp["title"]),
-				Summary:   asString(mp["content"]),
-				CoverURL:  asString(mp["pic_url"]),
-				URL:       buildMpURL(asString(mp["originalId"])),
+				ReviewID:  reviewID,
+				Title:     mp.Title,
+				Summary:   summary,
+				CoverURL:  mp.PicURL,
+				URL:       buildMpURL(mp.OriginalID),
 				PublishAt: publishAt,
-				ReadNum:   asInt64(mp["readNum"]),
-				LikeNum:   asInt64(mp["likeNum"]),
+				ReadNum:   mp.ReadNum,
+				LikeNum:   mp.LikeNum,
 			})
 		}
 	}
-	return items, nil
+	return items, envelope.Synckey, nil
+}
+
+func truncateForArticleLog(b []byte, n int) string {
+	s := string(b)
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "...(truncated)"
 }
 
 func (s *Service) warmupBookOpen(ctx context.Context, userID, preferAccountID int64, bookID string) error {
@@ -407,6 +551,8 @@ func (s *Service) fetchContentViaShareChapterWithLog(ctx context.Context, userID
 
 // webContentClient 用于访问 weread 网页端接口（weread.qq.com/web/*）。
 // 与 mpClient 不同：这里需要 Cookie jar 维持 wr_vid / wr_skey 会话。
+var wereadWebBaseURL = "https://weread.qq.com"
+
 var webContentClient = &http.Client{
 	Timeout: 20 * time.Second,
 	CheckRedirect: func(_ *http.Request, via []*http.Request) error {
@@ -432,8 +578,14 @@ func (s *Service) fetchContentViaWebContent(ctx context.Context, userID int64, r
 		return "", fmt.Errorf("pick account: %w", err)
 	}
 
-	url := "https://weread.qq.com/web/mp/content?reviewId=" + reviewID
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	endpoint, err := url.Parse(strings.TrimRight(wereadWebBaseURL, "/") + "/web/mp/content")
+	if err != nil {
+		return "", err
+	}
+	query := endpoint.Query()
+	query.Set("reviewId", reviewID)
+	endpoint.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -662,42 +814,4 @@ func asString(v interface{}) string {
 	}
 	s, _ := v.(string)
 	return s
-}
-
-func asInt64(v interface{}) int64 {
-	switch x := v.(type) {
-	case float64:
-		return int64(x)
-	case int64:
-		return x
-	case int:
-		return int64(x)
-	case json.Number:
-		n, _ := x.Int64()
-		return n
-	default:
-		return 0
-	}
-}
-
-var dumpMpInfoDone = false
-
-func dumpMpInfoOnce(reviewID string, createTime int64, mpInfo map[string]interface{}) {
-	if dumpMpInfoDone || mpInfo == nil {
-		return
-	}
-	dumpMpInfoDone = true
-	mp := make(map[string]interface{}, len(mpInfo))
-	for k, v := range mpInfo {
-		if k == "coverBoxInfo" {
-			continue
-		}
-		mp[k] = v
-	}
-	b, _ := json.MarshalIndent(map[string]interface{}{
-		"reviewId":   reviewID,
-		"createTime": createTime,
-		"mpInfo":     mp,
-	}, "", "  ")
-	log.Printf("[dump once] /book/articles first review (coverBoxInfo stripped):\n%s", string(b))
 }

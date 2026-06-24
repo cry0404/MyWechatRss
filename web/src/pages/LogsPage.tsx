@@ -39,6 +39,8 @@ type FilterMode = "all" | "rate-limit" | "fail" | "success";
 
 const chainLabel: Record<string, string> = {
   source: "订阅源列表",
+  "web/mp/articles": "Web 文章列表",
+  "app/book/articles": "App 文章列表",
   web: "微信读书网页端",
   mp: "公众号公开页",
   shareChapter: "App 接口",
@@ -48,6 +50,10 @@ function chainTone(chain: string) {
   switch (chain) {
     case "source":
       return "var(--color-accent, #2563eb)";
+    case "web/mp/articles":
+      return "var(--color-success, #22c55e)";
+    case "app/book/articles":
+      return "var(--color-danger)";
     case "web":
       return "var(--color-success, #22c55e)";
     case "mp":

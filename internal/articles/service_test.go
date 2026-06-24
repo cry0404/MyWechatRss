@@ -86,7 +86,7 @@ func TestFetchContentViaShareChapterUsesSingleProtocolAttempt(t *testing.T) {
 	}
 }
 
-func TestFetchLatestWarmsBookOpenBeforeArticles(t *testing.T) {
+func TestFetchLatestUsesWebMpArticlesWithoutAppArticleWarmup(t *testing.T) {
 	withFastBookOpenWarmup(t)
 
 	ctx := context.Background()
@@ -106,8 +106,7 @@ func TestFetchLatestWarmsBookOpenBeforeArticles(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	var paths []string
-	var readInfoVID string
+	var appCalls int32
 	up := articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/proxy/weread/call" {
 			http.NotFound(w, r)
@@ -117,15 +116,54 @@ func TestFetchLatestWarmsBookOpenBeforeArticles(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatalf("decode call req: %v", err)
 		}
-		paths = append(paths, req.Path)
-		if req.Path == "/book/readinfo" {
-			readInfoVID = req.Query["vid"]
-		}
+		atomic.AddInt32(&appCalls, 1)
+		t.Fatalf("unexpected app upstream call %s", req.Path)
 		writeArticleJSON(t, w, upstream.CallResp{
 			Status:  http.StatusOK,
 			Headers: map[string]string{},
-			Body:    json.RawMessage(`{"errcode":0,"reviews":[{"subReviews":[{"review":{"reviewId":"MP_WXS_1_r1","createTime":1778580000,"mpInfo":{"title":"t","content":"s","time":1778580000,"originalId":"x"}}}]}]}`),
+			Body:    json.RawMessage(`{"errcode":0}`),
 		})
+	})
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("bookId"); got != sub.BookID {
+			t.Fatalf("bookId=%q want %q", got, sub.BookID)
+		}
+		if got := r.Header.Get("Cookie"); !strings.Contains(got, "wr_vid=565310662") || !strings.Contains(got, "wr_skey=skey") {
+			t.Fatalf("cookie header missing wr_vid/wr_skey: %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if got := r.URL.Query().Get("offset"); got == "1" {
+			_, _ = io.WriteString(w, `{"synckey":1782304237,"reviews":[]}`)
+			return
+		} else if got != "0" {
+			t.Fatalf("offset=%q want 0 or 1", got)
+		}
+		_, _ = io.WriteString(w, `{
+			"synckey": 1782304237,
+			"reviews": [{
+				"createTime": 1778580000,
+				"subReviews": [{
+					"reviewId": "MP_WXS_1_r1",
+					"review": {
+						"reviewId": "MP_WXS_1_r1",
+						"createTime": 1778580000,
+						"mpInfo": {
+							"title": "web title",
+							"content": "web summary",
+							"time": 1778580000,
+							"originalId": "abc~def",
+							"pic_url": "https://example.test/pic.jpg",
+							"readNum": 12,
+							"likeNum": 3
+						}
+					}
+				}]
+			}]
+		}`)
 	})
 
 	svc := &Service{
@@ -133,21 +171,38 @@ func TestFetchLatestWarmsBookOpenBeforeArticles(t *testing.T) {
 		Caller: &accounts.Caller{Store: st, Upstream: up},
 		Mode:   "summary",
 	}
-	if _, err := svc.FetchLatest(ctx, user.ID, sub.ID); err != nil {
+	n, err := svc.FetchLatest(ctx, user.ID, sub.ID)
+	if err != nil {
 		t.Fatalf("FetchLatest: %v", err)
 	}
+	if n != 1 {
+		t.Fatalf("new count=%d want 1", n)
+	}
+	if got := atomic.LoadInt32(&appCalls); got != 0 {
+		t.Fatalf("unexpected app upstream calls=%d", got)
+	}
 
-	wantPrefix := []string{"/book/info", "/book/getProgress", "/book/readinfo", "/book/detailinfo", "/book/articles"}
-	if len(paths) < len(wantPrefix) {
-		t.Fatalf("paths=%v want prefix=%v", paths, wantPrefix)
+	gotSub, err := st.GetSubscription(ctx, user.ID, sub.ID)
+	if err != nil {
+		t.Fatalf("GetSubscription: %v", err)
 	}
-	for i := range wantPrefix {
-		if paths[i] != wantPrefix[i] {
-			t.Fatalf("paths=%v want prefix=%v", paths, wantPrefix)
-		}
+	if gotSub.ArticleSynckey != 1782304237 {
+		t.Fatalf("article synckey=%d want 1782304237", gotSub.ArticleSynckey)
 	}
-	if readInfoVID != "565310662" {
-		t.Fatalf("readinfo vid=%q want 565310662", readInfoVID)
+
+	article, err := st.GetArticleByReviewID(ctx, "MP_WXS_1_r1")
+	if err != nil {
+		t.Fatalf("GetArticleByReviewID: %v", err)
+	}
+	if article.Title != "web title" || article.Summary != "web summary" || article.URL != "https://mp.weixin.qq.com/s/abc_def" {
+		t.Fatalf("article parsed from web response = %+v", article)
+	}
+	events, err := st.ListFetchEvents(ctx, user.ID, 10, 0, false)
+	if err != nil {
+		t.Fatalf("ListFetchEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Chain != "web/mp/articles" || !events[0].Success {
+		t.Fatalf("events=%+v want one successful web/mp/articles source event", events)
 	}
 }
 
@@ -176,6 +231,15 @@ func TestFetchLatestUsesLightProbeDuringRateLimitRecovery(t *testing.T) {
 
 	var articleCount string
 	var shareChapterCalls int32
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
+			http.NotFound(w, r)
+			return
+		}
+		articleCount = r.URL.Query().Get("count")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"reviews":[{"subReviews":[{"review":{"reviewId":"MP_WXS_1_r1","createTime":1778580000,"mpInfo":{"title":"t","content":"s","time":1778580000,"originalId":"x"}}}]}]}`)
+	})
 	up := articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/proxy/weread/call" {
 			http.NotFound(w, r)
@@ -197,13 +261,6 @@ func TestFetchLatestUsesLightProbeDuringRateLimitRecovery(t *testing.T) {
 				Status:  http.StatusOK,
 				Headers: map[string]string{},
 				Body:    json.RawMessage(`{"errcode":0}`),
-			})
-		case "/book/articles":
-			articleCount = req.Query["count"]
-			writeArticleJSON(t, w, upstream.CallResp{
-				Status:  http.StatusOK,
-				Headers: map[string]string{},
-				Body:    json.RawMessage(`{"errcode":0,"reviews":[{"subReviews":[{"review":{"reviewId":"MP_WXS_1_r1","createTime":1778580000,"mpInfo":{"title":"t","content":"s","time":1778580000,"originalId":"x"}}}]}]}`),
 			})
 		case "/book/shareChapter":
 			atomic.AddInt32(&shareChapterCalls, 1)
@@ -255,21 +312,17 @@ func TestFetchLatestRecordsSourceRateLimitLog(t *testing.T) {
 		t.Fatalf("CreateAccount: %v", err)
 	}
 
-	up := articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/proxy/weread/call" {
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
 			http.NotFound(w, r)
 			return
 		}
-		writeArticleJSON(t, w, upstream.CallResp{
-			Status:  http.StatusOK,
-			Headers: map[string]string{},
-			Body:    json.RawMessage(`{"errcode":-2041,"errmsg":"-2041"}`),
-		})
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"errcode":-2041,"errmsg":"-2041"}`)
 	})
 
 	svc := &Service{
-		Store:  st,
-		Caller: &accounts.Caller{Store: st, Upstream: up},
+		Store: st,
 	}
 	_, err := svc.FetchLatest(ctx, user.ID, sub.ID)
 	if !errors.Is(err, accounts.ErrSearchRateLimited) {
@@ -283,8 +336,8 @@ func TestFetchLatestRecordsSourceRateLimitLog(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("events len=%d want 1", len(events))
 	}
-	if events[0].Chain != "source" || events[0].SubscriptionID != sub.ID || events[0].ErrorCode != "-2041" {
-		t.Fatalf("event=(chain:%q sub:%d code:%q), want source/%d/-2041",
+	if events[0].Chain != "web/mp/articles" || events[0].SubscriptionID != sub.ID || events[0].ErrorCode != "-2041" {
+		t.Fatalf("event=(chain:%q sub:%d code:%q), want web/mp/articles/%d/-2041",
 			events[0].Chain, events[0].SubscriptionID, events[0].ErrorCode, sub.ID)
 	}
 }
@@ -326,6 +379,22 @@ func articleTestUpstreamClient(t *testing.T, h http.HandlerFunc) *upstream.Clien
 		return rr.result(req), nil
 	})}
 	return c
+}
+
+func withWereadWebHandler(t *testing.T, h http.HandlerFunc) {
+	t.Helper()
+	oldBaseURL := wereadWebBaseURL
+	oldClient := webContentClient
+	wereadWebBaseURL = "https://weread.test"
+	webContentClient = &http.Client{Transport: articleRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		rr := newArticleResponseRecorder()
+		h(rr, req)
+		return rr.result(req), nil
+	})}
+	t.Cleanup(func() {
+		wereadWebBaseURL = oldBaseURL
+		webContentClient = oldClient
+	})
 }
 
 type articleRoundTripFunc func(*http.Request) (*http.Response, error)

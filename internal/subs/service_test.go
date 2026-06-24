@@ -106,6 +106,54 @@ func TestSearchUsesInitialSIDThenMPScopedSearch(t *testing.T) {
 	}
 }
 
+func TestSearchDirectBookIDUsesBookInfoWithoutStoreSearch(t *testing.T) {
+	ctx := context.Background()
+	st, user := newSubsTestStore(t)
+
+	var calls []upstream.CallReq
+	up := upstream.New("http://upstream.test", "test-key", "test-secret")
+	up.HTTP = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/proxy/weread/call" {
+			return newSubsHTTPResponse(http.StatusNotFound, `not found`), nil
+		}
+		var req upstream.CallReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode call req: %v", err)
+		}
+		calls = append(calls, req)
+		if req.Path != "/book/info" {
+			t.Fatalf("direct MP_WXS lookup should not call %s", req.Path)
+		}
+		if req.Query["bookId"] != "MP_WXS_3271041950" {
+			t.Fatalf("bookId=%q want MP_WXS_3271041950", req.Query["bookId"])
+		}
+		return newSubsJSONResponse(t, upstream.CallResp{
+			Status:  http.StatusOK,
+			Headers: map[string]string{},
+			Body: json.RawMessage(`{
+				"title": "新智元",
+				"author": "公众号",
+				"cover": "https://example.test/cover.jpg"
+			}`),
+		}), nil
+	})}
+
+	svc := NewService(st, &accounts.Caller{Store: st, Upstream: up})
+	items, err := svc.Search(ctx, user.ID, "  MP_WXS_3271041950  ")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("calls=%d want 1", len(calls))
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len=%d want 1", len(items))
+	}
+	if items[0].BookID != "MP_WXS_3271041950" || items[0].Title != "新智元" || items[0].Cover == "" {
+		t.Fatalf("direct item=%+v", items[0])
+	}
+}
+
 func newSubsTestStore(t *testing.T) (*store.Store, *model.User) {
 	t.Helper()
 	codec, err := crypto.New("test-secret-with-enough-length")

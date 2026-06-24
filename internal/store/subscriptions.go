@@ -22,10 +22,10 @@ func (s *Store) CreateSubscription(ctx context.Context, sub *model.Subscription)
         INSERT INTO subscriptions
             (user_id, book_id, alias, mp_name, cover_url,
              fetch_interval_sec, fetch_window_start_min, fetch_window_end_min,
-             last_fetch_at, last_review_time, created_at, disabled)
-        VALUES (?, ?, ?, ?, ?, ?, -1, -1, 0, 0, ?, 0)
+             last_fetch_at, last_review_time, article_synckey, created_at, disabled)
+        VALUES (?, ?, ?, ?, ?, ?, -1, -1, 0, 0, ?, ?, 0)
     `, sub.UserID, sub.BookID, sub.Alias, sub.MPName, sub.CoverURL,
-		sub.FetchIntervalSec, sub.CreatedAt)
+		sub.FetchIntervalSec, sub.ArticleSynckey, sub.CreatedAt)
 	if err != nil {
 		return err
 	}
@@ -37,7 +37,7 @@ func (s *Store) ListSubscriptionsByUser(ctx context.Context, userID int64) ([]*m
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, user_id, book_id, alias, mp_name, cover_url,
                fetch_interval_sec, fetch_window_start_min, fetch_window_end_min, next_fetch_after,
-               last_fetch_at, last_review_time, created_at, disabled
+               last_fetch_at, last_review_time, article_synckey, created_at, disabled
         FROM subscriptions
         WHERE user_id = ?
         ORDER BY created_at DESC
@@ -62,7 +62,7 @@ func (s *Store) GetSubscription(ctx context.Context, userID, id int64) (*model.S
 	row := s.db.QueryRowContext(ctx, `
         SELECT id, user_id, book_id, alias, mp_name, cover_url,
                fetch_interval_sec, fetch_window_start_min, fetch_window_end_min, next_fetch_after,
-               last_fetch_at, last_review_time, created_at, disabled
+               last_fetch_at, last_review_time, article_synckey, created_at, disabled
         FROM subscriptions
         WHERE user_id = ? AND id = ?
     `, userID, id)
@@ -77,7 +77,7 @@ func (s *Store) GetSubscriptionByBookID(ctx context.Context, userID int64, bookI
 	row := s.db.QueryRowContext(ctx, `
         SELECT id, user_id, book_id, alias, mp_name, cover_url,
                fetch_interval_sec, fetch_window_start_min, fetch_window_end_min, next_fetch_after,
-               last_fetch_at, last_review_time, created_at, disabled
+               last_fetch_at, last_review_time, article_synckey, created_at, disabled
         FROM subscriptions
         WHERE user_id = ? AND book_id = ?
     `, userID, bookID)
@@ -116,10 +116,15 @@ func (s *Store) UpdateSubscriptionMeta(ctx context.Context, userID, id int64, al
 	return err
 }
 
-func (s *Store) UpdateSubscriptionFetchState(ctx context.Context, id int64, lastFetchAt, lastReviewTime int64) error {
+func (s *Store) UpdateSubscriptionFetchState(ctx context.Context, id int64, lastFetchAt, lastReviewTime, articleSynckey int64) error {
 	_, err := s.db.ExecContext(ctx, `
-        UPDATE subscriptions SET last_fetch_at = ?, last_review_time = ?, next_fetch_after = 0 WHERE id = ?
-    `, lastFetchAt, lastReviewTime, id)
+        UPDATE subscriptions
+        SET last_fetch_at = ?,
+            last_review_time = ?,
+            article_synckey = CASE WHEN ? > 0 THEN ? ELSE article_synckey END,
+            next_fetch_after = 0
+        WHERE id = ?
+    `, lastFetchAt, lastReviewTime, articleSynckey, articleSynckey, id)
 	return err
 }
 
@@ -277,7 +282,7 @@ func (s *Store) ListSubscriptionsDueForFetch(ctx context.Context, now int64) ([]
 	rows, err := s.db.QueryContext(ctx, `
         SELECT id, user_id, book_id, alias, mp_name, cover_url,
                fetch_interval_sec, fetch_window_start_min, fetch_window_end_min, next_fetch_after,
-               last_fetch_at, last_review_time, created_at, disabled
+               last_fetch_at, last_review_time, article_synckey, created_at, disabled
         FROM subscriptions
         WHERE disabled = 0
           AND last_fetch_at + fetch_interval_sec <= ?
@@ -309,7 +314,7 @@ func scanSubscription(row rowScanner) (*model.Subscription, error) {
 	if err := row.Scan(
 		&sub.ID, &sub.UserID, &sub.BookID, &sub.Alias, &sub.MPName, &sub.CoverURL,
 		&sub.FetchIntervalSec, &sub.FetchWindowStartMin, &sub.FetchWindowEndMin, &sub.NextFetchAfter,
-		&sub.LastFetchAt, &sub.LastReviewTime, &sub.CreatedAt, &disabled,
+		&sub.LastFetchAt, &sub.LastReviewTime, &sub.ArticleSynckey, &sub.CreatedAt, &disabled,
 	); err != nil {
 		return nil, err
 	}
