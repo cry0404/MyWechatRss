@@ -342,6 +342,78 @@ func TestFetchLatestRecordsSourceRateLimitLog(t *testing.T) {
 	}
 }
 
+func TestFetchLatestRefreshesAndDefersAfterWebSessionExpired(t *testing.T) {
+	ctx := context.Background()
+	st, user, sub := newArticleTestStore(t)
+	acc := &model.WeReadAccount{
+		UserID:       user.ID,
+		VID:          565310662,
+		SKey:         "expired-skey",
+		RefreshToken: "refresh-token",
+		Cookies:      map[string]string{},
+		Status:       model.AccountActive,
+		DeviceID:     "dev",
+		InstallID:    "install",
+		DeviceName:   "device",
+	}
+	if err := st.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	var refreshCalls int32
+	up := articleTestUpstreamClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/proxy/weread/login/refresh" {
+			http.NotFound(w, r)
+			return
+		}
+		atomic.AddInt32(&refreshCalls, 1)
+		writeArticleJSON(t, w, upstream.LoginRefreshResp{
+			Credential: &upstream.Credential{
+				VID:          565310662,
+				SKey:         "fresh-skey",
+				RefreshToken: "refresh-token",
+			},
+		})
+	})
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"errcode":-2012,"errmsg":"登录超时"}`)
+	})
+
+	svc := &Service{
+		Store:  st,
+		Caller: &accounts.Caller{Store: st, Upstream: up},
+	}
+	_, err := svc.FetchLatest(ctx, user.ID, sub.ID)
+	if !errors.Is(err, accounts.ErrHighRiskDeferred) {
+		t.Fatalf("FetchLatest err=%v want ErrHighRiskDeferred", err)
+	}
+	if got := atomic.LoadInt32(&refreshCalls); got != 1 {
+		t.Fatalf("refresh calls=%d want 1", got)
+	}
+	accs, err := st.ListAccountsByUser(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("ListAccountsByUser: %v", err)
+	}
+	if len(accs) != 1 {
+		t.Fatalf("accounts=%d want 1", len(accs))
+	}
+	if accs[0].SKey != "fresh-skey" || accs[0].Status != model.AccountActive || accs[0].LastErr != "" {
+		t.Fatalf("account after refresh=%+v", accs[0])
+	}
+	events, err := st.ListFetchEvents(ctx, user.ID, 10, 0, false)
+	if err != nil {
+		t.Fatalf("ListFetchEvents: %v", err)
+	}
+	if len(events) != 1 || events[0].Chain != "web/mp/articles" || events[0].ErrorCode != "-2012" {
+		t.Fatalf("events=%+v want one web/mp/articles -2012 event", events)
+	}
+}
+
 func newArticleTestStore(t *testing.T) (*store.Store, *model.User, *model.Subscription) {
 	t.Helper()
 	codec, err := crypto.New("test-secret-with-enough-length")

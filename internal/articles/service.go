@@ -264,7 +264,7 @@ func (s *Service) fetchReviewListViaWeb(ctx context.Context, userID, preferAccou
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s http %d: %s", articleListChainWeb, resp.StatusCode, truncateForArticleLog(body, 256))
 	}
-	if err := handleWebArticleListErr(ctx, s.Store, acc, body); err != nil {
+	if err := s.handleWebArticleListErr(ctx, acc, body); err != nil {
 		return nil, err
 	}
 
@@ -272,6 +272,7 @@ func (s *Service) fetchReviewListViaWeb(ctx context.Context, userID, preferAccou
 	if err != nil {
 		return nil, err
 	}
+	_ = s.Store.MarkAccountOK(ctx, acc.ID)
 	if count > 0 && len(items) > count {
 		items = items[:count]
 	}
@@ -298,7 +299,7 @@ func (s *Service) pickActiveAccountForWeb(ctx context.Context, userID, preferAcc
 	return acc, nil
 }
 
-func handleWebArticleListErr(ctx context.Context, st *store.Store, acc *model.WeReadAccount, body []byte) error {
+func (s *Service) handleWebArticleListErr(ctx context.Context, acc *model.WeReadAccount, body []byte) error {
 	var hdr struct {
 		ErrCode int    `json:"errcode"`
 		ErrMsg  string `json:"errmsg"`
@@ -316,12 +317,23 @@ func handleWebArticleListErr(ctx context.Context, st *store.Store, acc *model.We
 	switch hdr.ErrCode {
 	case -2041:
 		reason := "errcode=-2041 " + msg
-		_ = st.MarkAccountCooldown(ctx, acc.ID, reason, accounts.RateLimitCooldownDuration)
+		_ = s.Store.MarkAccountCooldown(ctx, acc.ID, reason, accounts.RateLimitCooldownDuration)
 		log.Printf("[web/mp/articles] -2041 search-rate-limit account=%d vid=%d errmsg=%q -> cooldown", acc.ID, acc.VID, msg)
 		return fmt.Errorf("%w: account %d path=/%s: %s", accounts.ErrSearchRateLimited, acc.ID, articleListChainWeb, msg)
+	case -2012:
+		reason := "errcode=-2012 " + msg
+		if s.Caller != nil && s.Caller.RefreshAfterSessionExpired(ctx, acc, "/"+articleListChainWeb) {
+			log.Printf("[web/mp/articles] -2012 session-expired account=%d vid=%d errmsg=%q -> refreshed and deferred",
+				acc.ID, acc.VID, msg)
+			return fmt.Errorf("%w: account %d refreshed after %s", accounts.ErrHighRiskDeferred, acc.ID, reason)
+		}
+		_ = s.Store.MarkAccountCooldown(ctx, acc.ID, reason, accounts.CooldownDuration)
+		log.Printf("[web/mp/articles] -2012 session-expired account=%d vid=%d errmsg=%q -> cooldown",
+			acc.ID, acc.VID, msg)
+		return fmt.Errorf("account %d cooldown: %s", acc.ID, reason)
 	case -2010:
 		reason := "errcode=-2010 " + msg
-		_ = st.MarkAccountCooldown(ctx, acc.ID, reason, accounts.CooldownDuration)
+		_ = s.Store.MarkAccountCooldown(ctx, acc.ID, reason, accounts.CooldownDuration)
 		return fmt.Errorf("account %d cooldown: %s", acc.ID, reason)
 	default:
 		return fmt.Errorf("%s errcode=%d errmsg=%s", articleListChainWeb, hdr.ErrCode, msg)

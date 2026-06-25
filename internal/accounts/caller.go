@@ -356,6 +356,16 @@ func (cr *Caller) ProactiveRefresh(ctx context.Context, acc *model.WeReadAccount
 	return cr.doRefresh(ctx, acc, "", "proactive")
 }
 
+// RefreshAfterSessionExpired 在非 Caller.Do 管理的链路命中 -2012 后复用同一套
+// refreshToken 续期逻辑。成功或刚被防抖拦截都表示调用方应该延后高风险业务重试。
+func (cr *Caller) RefreshAfterSessionExpired(ctx context.Context, acc *model.WeReadAccount, refCgi string) bool {
+	if cr == nil || acc == nil {
+		return false
+	}
+	refresh := cr.tryRefresh(ctx, acc, refCgi)
+	return refresh == refreshSucceeded || refresh == refreshDebounced
+}
+
 func (cr *Caller) tryRefresh(ctx context.Context, acc *model.WeReadAccount, refCgi string) refreshResult {
 	if acc.RefreshToken == "" {
 		log.Printf("[caller refresh] skip account=%d vid=%d refCgi=%q reason=no-refresh-token",
