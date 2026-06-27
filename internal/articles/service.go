@@ -107,12 +107,22 @@ func (s *Service) FetchLatest(ctx context.Context, userID, subID int64) (int, er
 	articleSynckey := listRes.Synckey
 	reviews := listRes.Items
 
-	if firstRun && !recoveryProbe && len(reviews) > 0 && len(reviews) < firstFetchMax {
-		more, err := s.fetchReviewList(ctx, userID, preferID, sub, incrFetchPage, len(reviews))
-		if err == nil {
-			reviews = append(reviews, more.Items...)
-			if more.Synckey > 0 {
-				articleSynckey = more.Synckey
+	if firstRun && !recoveryProbe && len(reviews) >= pageSize && len(reviews) < firstFetchMax {
+		jitterSleep(ctx, firstFetchSleepMin, firstFetchSleepMax)
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		count := firstFetchMax - len(reviews)
+		if count > incrFetchPage {
+			count = incrFetchPage
+		}
+		if count > 0 {
+			more, err := s.fetchReviewList(ctx, userID, preferID, sub, count, len(reviews))
+			if err == nil {
+				reviews = append(reviews, more.Items...)
+				if more.Synckey > 0 {
+					articleSynckey = more.Synckey
+				}
 			}
 		}
 	}

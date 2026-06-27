@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cry0404/MyWechatRss/internal/accounts"
 	"github.com/cry0404/MyWechatRss/internal/crypto"
@@ -203,6 +205,118 @@ func TestFetchLatestUsesWebMpArticlesWithoutAppArticleWarmup(t *testing.T) {
 	}
 	if len(events) != 1 || events[0].Chain != "web/mp/articles" || !events[0].Success {
 		t.Fatalf("events=%+v want one successful web/mp/articles source event", events)
+	}
+}
+
+func TestFetchLatestDoesNotFetchSecondPageWhenFirstPageIsSparse(t *testing.T) {
+	ctx := context.Background()
+	st, user, sub := newArticleTestStore(t)
+	acc := &model.WeReadAccount{
+		UserID:       user.ID,
+		VID:          565310662,
+		SKey:         "skey",
+		RefreshToken: "refresh-token",
+		Cookies:      map[string]string{},
+		Status:       model.AccountActive,
+		DeviceID:     "dev",
+		InstallID:    "install",
+		DeviceName:   "device",
+	}
+	if err := st.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	var articleCalls int32
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("offset"); got != "0" {
+			t.Fatalf("unexpected second page request offset=%q", got)
+		}
+		atomic.AddInt32(&articleCalls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"synckey": 1782304237,
+			"reviews": [{
+				"createTime": 1778580000,
+				"subReviews": [{
+					"reviewId": "MP_WXS_1_r1",
+					"review": {
+						"reviewId": "MP_WXS_1_r1",
+						"createTime": 1778580000,
+						"mpInfo": {
+							"title": "web title",
+							"content": "web summary",
+							"time": 1778580000,
+							"originalId": "abc~def"
+						}
+					}
+				}]
+			}]
+		}`)
+	})
+
+	svc := &Service{Store: st, Mode: "summary"}
+	if _, err := svc.FetchLatest(ctx, user.ID, sub.ID); err != nil {
+		t.Fatalf("FetchLatest: %v", err)
+	}
+	if got := atomic.LoadInt32(&articleCalls); got != 1 {
+		t.Fatalf("article list calls=%d want 1", got)
+	}
+}
+
+func TestFetchLatestSpacesSecondArticleListPage(t *testing.T) {
+	ctx := context.Background()
+	st, user, sub := newArticleTestStore(t)
+	acc := &model.WeReadAccount{
+		UserID:       user.ID,
+		VID:          565310662,
+		SKey:         "skey",
+		RefreshToken: "refresh-token",
+		Cookies:      map[string]string{},
+		Status:       model.AccountActive,
+		DeviceID:     "dev",
+		InstallID:    "install",
+		DeviceName:   "device",
+	}
+	if err := st.CreateAccount(ctx, acc); err != nil {
+		t.Fatalf("CreateAccount: %v", err)
+	}
+
+	oldMin, oldMax := firstFetchSleepMin, firstFetchSleepMax
+	firstFetchSleepMin, firstFetchSleepMax = 20*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() {
+		firstFetchSleepMin, firstFetchSleepMax = oldMin, oldMax
+	})
+
+	var firstAt time.Time
+	var gap time.Duration
+	withWereadWebHandler(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/web/mp/articles" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("offset") {
+		case "0":
+			firstAt = time.Now()
+			_, _ = io.WriteString(w, fullArticleListResponse(20))
+		case "20":
+			gap = time.Since(firstAt)
+			_, _ = io.WriteString(w, `{"synckey":1782304238,"reviews":[]}`)
+		default:
+			t.Fatalf("unexpected offset=%q", r.URL.Query().Get("offset"))
+		}
+	})
+
+	svc := &Service{Store: st, Mode: "summary"}
+	if _, err := svc.FetchLatest(ctx, user.ID, sub.ID); err != nil {
+		t.Fatalf("FetchLatest: %v", err)
+	}
+	if gap < 15*time.Millisecond {
+		t.Fatalf("second page gap=%s want at least 15ms", gap)
 	}
 }
 
@@ -513,6 +627,20 @@ func writeArticleJSON(t *testing.T, w http.ResponseWriter, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		t.Fatalf("encode response: %v", err)
 	}
+}
+
+func fullArticleListResponse(n int) string {
+	var b strings.Builder
+	b.WriteString(`{"synckey":1782304237,"reviews":[{"createTime":1778580000,"subReviews":[`)
+	for i := 0; i < n; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, `{"reviewId":"MP_WXS_1_r%d","review":{"reviewId":"MP_WXS_1_r%d","createTime":%d,"mpInfo":{"title":"t%d","content":"s%d","time":%d,"originalId":"x%d"}}}`,
+			i, i, 1778580000+i, i, i, 1778580000+i, i)
+	}
+	b.WriteString(`]}]}`)
+	return b.String()
 }
 
 func withFastBookOpenWarmup(t *testing.T) {
