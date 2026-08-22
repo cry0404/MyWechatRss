@@ -45,6 +45,7 @@ export function ActionMenu({
 }) {
   const anchorRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
 
   const syncPosition = useCallback(() => {
@@ -88,11 +89,33 @@ export function ActionMenu({
 
   useEffect(() => {
     if (!open) return;
+    previouslyFocused.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const id = requestAnimationFrame(() => {
+      menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+    });
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onOpenChange(false);
+      const items = Array.from(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? []);
+      const index = items.indexOf(document.activeElement as HTMLElement);
+      if (e.key === "Escape") {
+        onOpenChange(false);
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const delta = e.key === "ArrowDown" ? 1 : -1;
+        items[(index + delta + items.length) % items.length]?.focus();
+      } else if (e.key === "Home") {
+        e.preventDefault();
+        items[0]?.focus();
+      } else if (e.key === "End") {
+        e.preventDefault();
+        items[items.length - 1]?.focus();
+      }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      cancelAnimationFrame(id);
+      document.removeEventListener("keydown", onKey);
+      previouslyFocused.current?.focus();
+    };
   }, [open, onOpenChange]);
 
   return (

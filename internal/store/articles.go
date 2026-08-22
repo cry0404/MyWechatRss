@@ -87,6 +87,17 @@ func (s *Store) ListArticlesByUser(ctx context.Context, userID int64, limit, off
 	return out, rows.Err()
 }
 
+func (s *Store) CountArticlesByUserSince(ctx context.Context, userID, since int64) (int64, error) {
+	var count int64
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT a.id)
+		FROM articles a
+		JOIN subscriptions s ON s.book_id = a.book_id
+		WHERE s.user_id = ? AND s.disabled = 0 AND a.publish_at >= ?
+	`, userID, since).Scan(&count)
+	return count, err
+}
+
 func (s *Store) ListArticlesByBook(ctx context.Context, bookID string, limit, offset int) ([]*model.Article, error) {
 	if limit <= 0 {
 		limit = 50

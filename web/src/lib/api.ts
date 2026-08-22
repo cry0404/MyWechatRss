@@ -100,12 +100,15 @@ export const api = {
   // Global articles (all subscriptions merged, paginated)
   getGlobalArticles: (limit?: number, offset?: number) =>
     request<Article[]>("GET", `/api/articles?limit=${limit || 20}&offset=${offset || 0}`),
+  getArticleCount: (since: number) =>
+    request<{ count: number }>("GET", `/api/articles/count?since=${since}`),
 
   // Site config (SMTP)
   getConfig: () =>
     request<SiteConfig>("GET", "/api/config"),
   updateConfig: (data: Partial<SiteConfig>) =>
     request<{ ok: boolean }>("PUT", "/api/config", data),
+  testEmail: () => request<{ ok: boolean }>("POST", "/api/config/test-email"),
 
   // Fetch logs / stats
   getFetchLogs: (reviewId?: string, offset?: number) =>
@@ -161,6 +164,7 @@ export interface Subscription {
   fetch_window_start_min: number;
   fetch_window_end_min: number;
   last_fetch_at?: number;
+  next_fetch_after?: number;
   last_review_time?: number;
   article_synckey?: number;
   created_at: number;
@@ -175,6 +179,7 @@ export interface UserInfo {
   email: string;
   is_admin: boolean;
   global_feed_url: string;
+  must_change_password: boolean;
 }
 
 export interface AuthResponse extends UserInfo {
@@ -185,7 +190,8 @@ export interface SiteConfig {
   smtp_host: string;
   smtp_port: number;
   smtp_username: string;
-  smtp_password: string;
+  smtp_password?: string;
+  smtp_password_set: boolean;
   smtp_from: string;
   smtp_use_tls: boolean;
 }

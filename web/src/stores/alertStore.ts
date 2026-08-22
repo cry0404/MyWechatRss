@@ -2,12 +2,14 @@ import { create } from "zustand";
 
 interface AlertState {
   message: string | null;
-  show: (message: string) => void;
+  tone: "success" | "error" | "info";
+  show: (message: string, tone?: "success" | "error" | "info") => void;
   hide: () => void;
 }
 
 export const useAlertStore = create<AlertState>((set) => ({
   message: null,
-  show: (message) => set({ message }),
+  tone: "error",
+  show: (message, tone = "error") => set({ message, tone }),
   hide: () => set({ message: null }),
 }));

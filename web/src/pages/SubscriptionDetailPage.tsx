@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { formatDate, formatRelativeTime, copyToClipboard } from "@/lib/utils";
 import { api, type Article, type Subscription } from "@/lib/api";
@@ -16,22 +16,26 @@ export default function SubscriptionDetailPage() {
   const showAlert = useAlertStore((s) => s.show);
   const { id } = useParams<{ id: string }>();
   const subscriptionId = Number(id);
-  const [offset, setOffset] = useState(0);
   const [copied, setCopied] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const queryClient = useQueryClient();
 
-  const { data: subscription, isLoading: subLoading } = useQuery({
+  const subscriptionQuery = useQuery({
     queryKey: ["subscription", subscriptionId],
     queryFn: async () => {
       const subs = await api.getSubscriptions();
       return subs.find((s) => s.id === subscriptionId) ?? null;
     },
   });
+  const subscription = subscriptionQuery.data;
 
-  const { data: articles, isLoading: articlesLoading } = useQuery({
-    queryKey: ["articles", subscriptionId, offset],
-    queryFn: () => api.getArticles(subscriptionId, offset),
+  const articlesQuery = useInfiniteQuery({
+    queryKey: ["articles", subscriptionId],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) => api.getArticles(subscriptionId, pageParam),
+    getNextPageParam: (lastPage, pages) =>
+      lastPage.length === PAGE_SIZE ? pages.length * PAGE_SIZE : undefined,
+    enabled: Number.isFinite(subscriptionId),
   });
 
   const refreshMutation = useMutation({
@@ -53,14 +57,24 @@ export default function SubscriptionDetailPage() {
     }
   };
 
-  const handleLoadMore = () => {
-    setOffset((prev) => prev + PAGE_SIZE);
-  };
+  const allArticles = useMemo(
+    () => articlesQuery.data?.pages.flatMap((page) => page) ?? [],
+    [articlesQuery.data]
+  );
 
-  if (subLoading) {
+  if (subscriptionQuery.isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
         <Loader2 className="w-6 h-6 animate-spin" style={{ color: "var(--color-ink-muted)" }} />
+      </div>
+    );
+  }
+
+  if (subscriptionQuery.isError) {
+    return (
+      <div className="max-w-2xl mx-auto py-12 text-center" role="alert">
+        <p className="text-sm mb-4" style={{ color: "var(--color-danger)" }}>订阅信息加载失败，请重试。</p>
+        <button type="button" onClick={() => subscriptionQuery.refetch()} className="btn-secondary text-sm px-4 py-2">重新加载</button>
       </div>
     );
   }
@@ -77,9 +91,6 @@ export default function SubscriptionDetailPage() {
       </div>
     );
   }
-
-  const allArticles = articles ?? [];
-  const hasMore = allArticles.length === PAGE_SIZE;
 
   return (
     <div className="page-enter max-w-2xl mx-auto">
@@ -149,9 +160,14 @@ export default function SubscriptionDetailPage() {
 
       <h2 className="text-2xl font-heading mb-4">文章</h2>
 
-      {articlesLoading && offset === 0 ? (
+      {articlesQuery.isLoading ? (
         <div className="flex justify-center py-16">
           <Loader2 className="w-6 h-6 animate-spin" style={{ color: "var(--color-ink-muted)" }} />
+        </div>
+      ) : articlesQuery.isError && allArticles.length === 0 ? (
+        <div className="py-10 text-center" role="alert">
+          <p className="text-sm mb-4" style={{ color: "var(--color-danger)" }}>文章加载失败，请重试。</p>
+          <button type="button" onClick={() => articlesQuery.refetch()} className="btn-secondary text-sm px-4 py-2">重新加载</button>
         </div>
       ) : allArticles.length === 0 ? (
         <p className="text-sm py-10" style={{ color: "var(--color-ink-muted)" }}>
@@ -165,16 +181,23 @@ export default function SubscriptionDetailPage() {
         </div>
       )}
 
-      {hasMore && (
+      {articlesQuery.isError && allArticles.length > 0 && (
+        <div className="mt-6 text-center" role="alert">
+          <p className="text-sm mb-3" style={{ color: "var(--color-danger)" }}>更多文章加载失败。</p>
+          <button type="button" onClick={() => articlesQuery.fetchNextPage()} className="btn-secondary text-sm px-4 py-2">重试</button>
+        </div>
+      )}
+
+      {articlesQuery.hasNextPage && !articlesQuery.isError && (
         <div className="flex justify-center mt-8">
           <button
             type="button"
-            onClick={handleLoadMore}
-            disabled={articlesLoading}
+            onClick={() => articlesQuery.fetchNextPage()}
+            disabled={articlesQuery.isFetchingNextPage}
             className="text-lg px-4 py-2 border-2 rounded-full disabled:opacity-50"
             style={{ borderColor: "var(--color-border)" }}
           >
-            {articlesLoading ? "加载中…" : "更多"}
+            {articlesQuery.isFetchingNextPage ? "加载中…" : "加载更多"}
           </button>
         </div>
       )}

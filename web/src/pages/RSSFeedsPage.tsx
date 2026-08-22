@@ -1,14 +1,16 @@
 import { useState, useEffect, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { SafeImg } from "@/components/SafeImg";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { api, type Article } from "@/lib/api";
-import { formatRelativeTime } from "@/lib/utils";
+import { copyToClipboard, formatRelativeTime, markFeedOnboardingReady } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 
 export default function RSSFeedsPage() {
   const [globalCopied, setGlobalCopied] = useState(false);
+  const [copyError, setCopyError] = useState("");
   const [offset, setOffset] = useState(0);
   const [allArticles, setAllArticles] = useState<Article[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -38,6 +40,8 @@ export default function RSSFeedsPage() {
     data: pageArticles,
     isLoading,
     isFetching,
+    isError,
+    refetch,
   } = useQuery({
     queryKey: ["global-articles", offset],
     queryFn: () => api.getGlobalArticles(PAGE_SIZE, offset),
@@ -68,13 +72,15 @@ export default function RSSFeedsPage() {
 
   const handleCopyGlobal = async () => {
     if (!globalFeedUrl) return;
-    try {
-      await navigator.clipboard.writeText(globalFeedUrl);
-      setGlobalCopied(true);
-      setTimeout(() => setGlobalCopied(false), 2000);
-    } catch {
-      /* ignore */
+    setCopyError("");
+    const copied = await copyToClipboard(globalFeedUrl);
+    if (!copied) {
+      setCopyError("复制失败，请手动选中上方地址复制。");
+      return;
     }
+    markFeedOnboardingReady();
+    setGlobalCopied(true);
+    setTimeout(() => setGlobalCopied(false), 2000);
   };
 
   return (
@@ -119,6 +125,15 @@ export default function RSSFeedsPage() {
               </a>
             </div>
           </div>
+          {copyError && <p className="mt-2 text-sm" style={{ color: "var(--color-danger)" }} role="alert">{copyError}</p>}
+          <details className="group mt-4 rounded-lg border-2 px-4 py-3" style={{ borderColor: "var(--color-border-soft)" }}>
+            <summary className="cursor-pointer text-sm font-medium">如何添加到 RSS 阅读器</summary>
+            <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-relaxed" style={{ color: "var(--color-ink-muted)" }}>
+              <li>点击“复制”，获取这条聚合 RSS 地址。</li>
+              <li>打开你的 RSS 阅读器，选择“添加订阅”或“通过 URL 添加”。</li>
+              <li>粘贴地址并确认；以后新文章会自动出现在阅读器中。</li>
+            </ol>
+          </details>
         </div>
       )}
 
@@ -129,10 +144,16 @@ export default function RSSFeedsPage() {
             style={{ color: "var(--color-ink-muted)" }}
           />
         </div>
+      ) : isError && allArticles.length === 0 ? (
+        <div className="py-12 text-center" role="alert">
+          <p className="text-sm mb-4" style={{ color: "var(--color-danger)" }}>文章流加载失败，请重试。</p>
+          <button type="button" onClick={() => refetch()} className="btn-secondary text-sm px-4 py-2">重新加载</button>
+        </div>
       ) : allArticles.length === 0 ? (
-        <p className="text-sm py-12" style={{ color: "var(--color-ink-muted)" }}>
-          尚无文章，等待抓取或到订阅页手动刷新
-        </p>
+        <div className="py-12 text-center">
+          <p className="text-sm mb-4" style={{ color: "var(--color-ink-muted)" }}>尚无文章，可等待自动抓取或立即检查订阅。</p>
+          <Link to="/subscriptions" className="btn-primary text-sm px-4 py-2">前往订阅</Link>
+        </div>
       ) : (
         <>
           <div
@@ -150,7 +171,12 @@ export default function RSSFeedsPage() {
 
           {/* Load more */}
           <div className="flex justify-center py-6">
-            {isFetching ? (
+            {isError ? (
+              <div className="text-center" role="alert">
+                <p className="text-sm mb-3" style={{ color: "var(--color-danger)" }}>更多文章加载失败。</p>
+                <button type="button" onClick={() => refetch()} className="btn-secondary text-sm px-4 py-2">重试</button>
+              </div>
+            ) : isFetching ? (
               <Loader2
                 className="w-5 h-5 animate-spin"
                 style={{ color: "var(--color-ink-muted)" }}
@@ -250,4 +276,3 @@ function FeedArticleRow({
     </div>
   );
 }
-

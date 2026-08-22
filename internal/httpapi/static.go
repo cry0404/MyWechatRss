@@ -25,6 +25,14 @@ var staticFS, _ = fs.Sub(app.DistFS, "web/dist")
 func serveStatic(r *gin.Engine) {
 	fsys := http.FS(staticFS)
 	fileServer := http.FileServer(fsys)
+	indexHTML, err := fs.ReadFile(staticFS, "index.html")
+	if err != nil {
+		panic("embedded web/dist/index.html is missing: " + err.Error())
+	}
+	serveIndex := func(c *gin.Context) {
+		c.Header("Cache-Control", "no-cache")
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
+	}
 
 	r.NoRoute(func(c *gin.Context) {
 		// API 和 RSS 路径下的 404 保持语义化——不要给前端 HTML，避免客户端误解析。
@@ -34,14 +42,19 @@ func serveStatic(r *gin.Engine) {
 			return
 		}
 
-		// 存在的文件直接交给 http.FileServer 出（走 ETag / Content-Type 正确处理）；
-		// 不存在的路径回退到 SPA 的 index.html，由前端 router 处理路由。
+		// 根路径与不存在的前端路由直接返回 index.html 内容。不要把 URL.Path
+		// 改成 /index.html 后再交给 FileServer；FileServer 会根据原始 RequestURI
+		// 把 /accounts 之类的深链接 301 到 ./，导致浏览器丢失目标路由。
 		if path == "/" {
-			path = "/index.html"
+			serveIndex(c)
+			return
 		}
 		if _, err := fs.Stat(staticFS, strings.TrimPrefix(path, "/")); err != nil {
-			c.Request.URL.Path = "/index.html"
+			serveIndex(c)
+			return
 		}
+
+		// 存在的静态文件仍交给 FileServer，以保留 Content-Type、缓存与范围请求处理。
 		fileServer.ServeHTTP(c.Writer, c.Request)
 	})
 }

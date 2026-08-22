@@ -90,6 +90,7 @@ func NewRouter(
 
 			artH := &ArticleHandlers{Articles: artSvc}
 			authed.GET("/articles", artH.List)
+			authed.GET("/articles/count", artH.Count)
 
 			logsH := &LogsHandlers{Store: st}
 			authed.GET("/fetch-logs", logsH.ListLogs)
@@ -99,6 +100,7 @@ func NewRouter(
 			cfgH := &ConfigHandlers{Store: st}
 			authed.GET("/config", cfgH.GetConfig)
 			authed.PUT("/config", cfgH.PutConfig)
+			authed.POST("/config/test-email", cfgH.TestEmail)
 		}
 	}
 

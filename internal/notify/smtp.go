@@ -19,7 +19,7 @@ type SMTPConfig struct {
 	Username string
 	Password string
 	From     string // 发件人。为空时会用 Username。
-	UseTLS bool
+	UseTLS   bool
 }
 
 func NewSMTP(cfg SMTPConfig) *SMTPNotifier {
@@ -33,6 +33,15 @@ func NewSMTP(cfg SMTPConfig) *SMTPNotifier {
 type SMTPNotifier struct {
 	cfg  SMTPConfig
 	from string
+}
+
+func (s *SMTPNotifier) Test(ctx context.Context, to string) error {
+	return s.send(
+		ctx,
+		to,
+		"[WeChatRead RSS] 邮件配置测试",
+		"你好，\n\n这是一封 WeChatRead RSS 测试邮件。收到此邮件说明 SMTP 告警配置可用。\n",
+	)
 }
 
 func (s *SMTPNotifier) AccountsAllDead(ctx context.Context, ev AccountsDeadEvent) error {

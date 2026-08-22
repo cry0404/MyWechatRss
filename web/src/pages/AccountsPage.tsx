@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2 } from "lucide-react";
 import { api, type Account } from "@/lib/api";
@@ -77,13 +77,13 @@ function QRBindModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   };
 
   return (
-    <ModalPortal>
+    <ModalPortal onClose={onClose}>
       <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
         <div className="absolute inset-0 z-0 bg-black/45" onClick={onClose} aria-hidden />
-        <div className="relative z-[1] w-full max-w-sm border-2 bg-white p-8 rounded-xl" style={{ borderColor: "var(--color-border)" }}>
+        <div className="relative z-[1] w-full max-w-sm border-2 bg-white p-8 rounded-xl" style={{ borderColor: "var(--color-border)" }} role="dialog" aria-modal="true" aria-labelledby="qr-dialog-title">
           <div className="flex justify-between items-start mb-6">
-            <h3 className="text-2xl font-heading">绑定微信读书账号</h3>
-            <button type="button" onClick={onClose} className="text-xs" style={{ color: "var(--color-ink-muted)" }}>
+            <h3 id="qr-dialog-title" className="text-2xl font-heading">绑定微信读书账号</h3>
+            <button type="button" onClick={onClose} className="text-xs" style={{ color: "var(--color-ink-muted)" }} data-autofocus>
               关闭
             </button>
           </div>
@@ -91,10 +91,11 @@ function QRBindModal({ open, onClose }: { open: boolean; onClose: () => void }) 
             {phase === "idle" ? (
               <>
                 <div className="w-full mb-5">
-                  <label className="block text-xs mb-1" style={{ color: "var(--color-ink-muted)" }}>
+                  <label htmlFor="qr-device-name" className="block text-xs mb-1" style={{ color: "var(--color-ink-muted)" }}>
                     设备名称（选填）
                   </label>
                   <input
+                    id="qr-device-name"
                     type="text"
                     value={deviceName}
                     onChange={(e) => setDeviceName(e.target.value)}
@@ -120,7 +121,7 @@ function QRBindModal({ open, onClose }: { open: boolean; onClose: () => void }) 
                   {phase === "loading" && <Loader2 className="w-7 h-7 animate-spin" style={{ color: "var(--color-ink-muted)" }} />}
                   {(phase === "scanning" || phase === "scanned") && qrImage && (
                     <>
-                      <img src={qrImage} alt="QR Code" className="w-full h-full object-contain p-2" />
+                      <img src={qrImage} alt="微信读书登录二维码" className="w-full h-full object-contain p-2" />
                       <div className="absolute inset-x-2 qr-scan-line pointer-events-none">
                         <div className="w-full h-[2px]" style={{ backgroundColor: "var(--color-accent)", opacity: 0.5 }} />
                       </div>
@@ -172,16 +173,16 @@ function EmptyState({ onBind }: { onBind: () => void }) {
 
 function DeleteDialog({ account, onCancel, onConfirm }: { account: Account; onCancel: () => void; onConfirm: () => void }) {
   return (
-    <ModalPortal>
+    <ModalPortal onClose={onCancel}>
       <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
         <div className="absolute inset-0 z-0 bg-black/45" onClick={onCancel} aria-hidden />
-        <div className="relative z-[1] w-full max-w-sm border-2 bg-white p-6 rounded-xl" style={{ borderColor: "var(--color-border)" }}>
-        <h3 className="text-2xl font-heading mb-2">删除账号？</h3>
-        <p className="text-sm mb-6" style={{ color: "var(--color-ink-muted)" }}>
+        <div className="relative z-[1] w-full max-w-sm border-2 bg-white p-6 rounded-xl" style={{ borderColor: "var(--color-border)" }} role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" aria-describedby="delete-account-description">
+        <h3 id="delete-account-title" className="text-2xl font-heading mb-2">删除账号？</h3>
+        <p id="delete-account-description" className="text-sm mb-6" style={{ color: "var(--color-ink-muted)" }}>
           将移除 <strong>{account.nickname}</strong>（VID {account.vid}），不可恢复。
         </p>
         <div className="flex gap-2 justify-end">
-          <button type="button" onClick={onCancel} className="btn-secondary rounded text-sm px-4 py-2">
+          <button type="button" onClick={onCancel} className="btn-secondary rounded text-sm px-4 py-2" data-autofocus>
             取消
           </button>
           <button
@@ -201,20 +202,11 @@ function DeleteDialog({ account, onCancel, onConfirm }: { account: Account; onCa
 
 export default function AccountsPage() {
   const showAlert = useAlertStore((s) => s.show);
-  const loadErrAlerted = useRef(false);
   const [qrOpen, setQrOpen] = useState(false);
   const [deleting, setDeleting] = useState<Account | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: accounts, isLoading, isError, error } = useQuery({ queryKey: ["accounts"], queryFn: api.getAccounts });
-
-  useEffect(() => {
-    if (isError && error && !loadErrAlerted.current) {
-      loadErrAlerted.current = true;
-      showAlert(toUserMessage(error));
-    }
-    if (!isError) loadErrAlerted.current = false;
-  }, [isError, error, showAlert]);
+  const { data: accounts, isLoading, isError, refetch } = useQuery({ queryKey: ["accounts"], queryFn: api.getAccounts });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.deleteAccount(id),
@@ -246,9 +238,10 @@ export default function AccountsPage() {
       )}
 
       {isError && (
-        <p className="text-sm text-center py-16" style={{ color: "var(--color-ink-muted)" }}>
-          加载失败，请刷新重试
-        </p>
+        <div className="text-center py-16" role="alert">
+          <p className="text-sm mb-4" style={{ color: "var(--color-danger)" }}>账号加载失败，请重试。</p>
+          <button type="button" onClick={() => refetch()} className="btn-secondary text-sm px-4 py-2">重新加载</button>
+        </div>
       )}
 
       {!isLoading && !isError && accounts && accounts.length === 0 && <EmptyState onBind={() => setQrOpen(true)} />}

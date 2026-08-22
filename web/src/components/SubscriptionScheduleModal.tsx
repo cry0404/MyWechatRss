@@ -131,7 +131,7 @@ export function SubscriptionScheduleModal({ subscription, onClose }: Props) {
   };
 
   return (
-    <ModalPortal>
+    <ModalPortal onClose={onClose}>
       <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
         <div className="absolute inset-0 z-0 bg-black/40" onClick={onClose} aria-hidden />
         <form
@@ -139,9 +139,13 @@ export function SubscriptionScheduleModal({ subscription, onClose }: Props) {
           className="relative z-[1] w-full max-w-md border-2 rounded-2xl bg-white p-6"
           style={{ borderColor: "var(--color-border)" }}
           onClick={(ev) => ev.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="schedule-dialog-title"
+          aria-describedby="schedule-dialog-description"
         >
-          <h3 className="text-2xl font-heading mb-1">抓取计划</h3>
-          <p className="text-sm mb-6 leading-relaxed" style={{ color: "var(--color-ink-muted)" }}>
+          <h3 id="schedule-dialog-title" className="text-2xl font-heading mb-1">抓取计划</h3>
+          <p id="schedule-dialog-description" className="text-sm mb-6 leading-relaxed" style={{ color: "var(--color-ink-muted)" }}>
             调度器按间隔检查是否到期；时段限制使用服务器本地时间（Docker 可设 TZ）。
           </p>
 
@@ -221,7 +225,7 @@ export function SubscriptionScheduleModal({ subscription, onClose }: Props) {
           </div>
 
           <div className="flex gap-2 justify-end">
-            <button type="button" onClick={onClose} className="btn-secondary !rounded-xl px-4 py-2.5">
+            <button type="button" onClick={onClose} className="btn-secondary !rounded-xl px-4 py-2.5" data-autofocus>
               取消
             </button>
             <button

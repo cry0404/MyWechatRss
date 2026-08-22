@@ -4,15 +4,14 @@ import { Loader2, Rss } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useLogin } from "@/hooks/useAuth";
 import { useAuthStore } from "@/stores/authStore";
-import { useAlertStore } from "@/stores/alertStore";
 import { toUserMessage } from "@/lib/userMessage";
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
-  const showAlert = useAlertStore((s) => s.show);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [formError, setFormError] = useState("");
 
   const loginMutation = useLogin();
 
@@ -25,14 +24,16 @@ export default function LoginPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !password.trim()) {
-      showAlert("Please enter username and password.");
+      setFormError("请输入用户名和密码。");
       return;
     }
+    setFormError("");
     loginMutation.mutate(
       { username: username.trim(), password },
       {
         onError: (err) => {
-          showAlert(toUserMessage(err));
+          const message = toUserMessage(err);
+          setFormError(message);
         },
         onSuccess: () => {
           navigate("/", { replace: true });
@@ -82,19 +83,20 @@ export default function LoginPage() {
                 WeChatRead RSS
               </h1>
               <p className="mt-1.5 text-base" style={{ color: "var(--color-ink-muted)" }}>
-                Sign in to your account
+                登录以管理你的 RSS 订阅
               </p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
-                <label className="mb-1.5 block text-sm font-medium" style={{ color: "var(--color-ink-muted)" }}>
-                  Username
+                <label htmlFor="login-username" className="mb-1.5 block text-sm font-medium" style={{ color: "var(--color-ink-muted)" }}>
+                  用户名
                 </label>
                 <input
+                  id="login-username"
                   type="text"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => { setUsername(e.target.value); setFormError(""); }}
                   className="input-editorial !rounded-xl"
                   autoComplete="username"
                   disabled={isPending}
@@ -102,18 +104,25 @@ export default function LoginPage() {
               </div>
 
               <div>
-                <label className="mb-1.5 block text-sm font-medium" style={{ color: "var(--color-ink-muted)" }}>
-                  Password
+                <label htmlFor="login-password" className="mb-1.5 block text-sm font-medium" style={{ color: "var(--color-ink-muted)" }}>
+                  密码
                 </label>
                 <input
+                  id="login-password"
                   type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => { setPassword(e.target.value); setFormError(""); }}
                   className="input-editorial !rounded-xl"
                   autoComplete="current-password"
                   disabled={isPending}
                 />
               </div>
+
+              {formError && (
+                <p className="text-sm" style={{ color: "var(--color-danger)" }} role="alert">
+                  {formError}
+                </p>
+              )}
 
               <button
                 type="submit"
@@ -123,14 +132,14 @@ export default function LoginPage() {
                   isPending && "cursor-not-allowed opacity-70"
                 )}
               >
-                {isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : "Sign in"}
+                {isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : "登录"}
               </button>
             </form>
           </div>
         </div>
 
         <p className="mt-6 text-center text-sm" style={{ color: "var(--color-ink-faint)" }}>
-          Private RSS feeds for your WeChat Reading subscriptions
+          把微信读书公众号订阅带进你的 RSS 阅读器
         </p>
       </div>
     </div>

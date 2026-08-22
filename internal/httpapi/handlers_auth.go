@@ -18,10 +18,16 @@ type AuthHandlers struct {
 	Store         *store.Store
 	Signer        *auth.Signer
 	AllowRegister bool
-	SecureCookie bool
+	SecureCookie  bool
 
 	FeedEncoder   *rss.FeedIDEncoder
 	PublicBaseURL string
+}
+
+const defaultBootstrapPassword = "changeme"
+
+func mustChangePassword(user *model.User) bool {
+	return auth.VerifyPassword(user.PasswordHash, defaultBootstrapPassword)
 }
 
 func (h *AuthHandlers) globalFeedURL(userID int64) string {
@@ -75,12 +81,13 @@ func (h *AuthHandlers) Register(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":              user.ID,
-		"username":        user.Username,
-		"email":           user.Email,
-		"is_admin":        user.IsAdmin,
-		"token":           tok,
-		"global_feed_url": h.globalFeedURL(user.ID),
+		"id":                   user.ID,
+		"username":             user.Username,
+		"email":                user.Email,
+		"is_admin":             user.IsAdmin,
+		"token":                tok,
+		"global_feed_url":      h.globalFeedURL(user.ID),
+		"must_change_password": mustChangePassword(user),
 	})
 }
 
@@ -114,12 +121,13 @@ func (h *AuthHandlers) Login(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":              user.ID,
-		"username":        user.Username,
-		"email":           user.Email,
-		"is_admin":        user.IsAdmin,
-		"token":           tok,
-		"global_feed_url": h.globalFeedURL(user.ID),
+		"id":                   user.ID,
+		"username":             user.Username,
+		"email":                user.Email,
+		"is_admin":             user.IsAdmin,
+		"token":                tok,
+		"global_feed_url":      h.globalFeedURL(user.ID),
+		"must_change_password": mustChangePassword(user),
 	})
 }
 
@@ -136,11 +144,12 @@ func (h *AuthHandlers) Me(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":              user.ID,
-		"username":        user.Username,
-		"email":           user.Email,
-		"is_admin":        user.IsAdmin,
-		"global_feed_url": h.globalFeedURL(user.ID),
+		"id":                   user.ID,
+		"username":             user.Username,
+		"email":                user.Email,
+		"is_admin":             user.IsAdmin,
+		"global_feed_url":      h.globalFeedURL(user.ID),
+		"must_change_password": mustChangePassword(user),
 	})
 }
 

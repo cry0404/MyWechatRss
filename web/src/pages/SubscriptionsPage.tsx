@@ -5,8 +5,6 @@ import {
   Loader2,
   Plus,
   Download,
-  SlidersHorizontal,
-  ListFilter,
   MoreHorizontal,
   RefreshCw,
 } from "lucide-react";
@@ -136,7 +134,7 @@ function RowActions({
           aria-haspopup="menu"
           className="rounded-md p-1.5 transition-colors duration-100 hover:bg-black/[0.06] active:bg-black/[0.08]"
           style={{ color: "var(--color-ink-muted)" }}
-          aria-label="More actions"
+          aria-label="更多操作"
         >
           <MoreHorizontal className="h-4 w-4" strokeWidth={2.5} />
         </button>
@@ -179,13 +177,19 @@ function RowActions({
   );
 }
 
-function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
+function AddSubscriptionModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (subscription: Subscription) => void;
+}) {
   const showAlert = useAlertStore((s) => s.show);
   const [query, setQuery] = useState("");
   const [inputValue, setInputValue] = useState("");
+  const [searchValidation, setSearchValidation] = useState("");
   const [selected, setSelected] = useState<SearchResult | null>(null);
   const [alias, setAlias] = useState("");
-  const queryClient = useQueryClient();
 
   const searchQuery = useQuery({
     queryKey: ["search", query],
@@ -198,13 +202,26 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
     mutationFn: (data: { book_id: string; alias: string }) =>
       api.createSubscription(data.book_id, data.alias),
     onSuccess: (sub) => {
-      queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+      onCreated(sub);
       onClose();
-      // 后台异步刷新文章，不阻塞 UI
-      api.refreshSubscription(sub.id).catch(() => {});
     },
     onError: (err) => showAlert(toUserMessage(err)),
   });
+
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    const nextQuery = inputValue.trim();
+    if (nextQuery.length < 2) {
+      setSearchValidation("请输入至少 2 个字符，或粘贴完整的 MP_WXS_ ID。");
+      return;
+    }
+    setSearchValidation("");
+    if (nextQuery === query) {
+      searchQuery.refetch();
+      return;
+    }
+    setQuery(nextQuery);
+  };
 
   const handleConfirm = () => {
     if (!selected || !alias.trim()) return;
@@ -212,16 +229,19 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <ModalPortal>
+    <ModalPortal onClose={onClose}>
       <div className="fixed inset-0 z-[1000] flex items-start justify-center pt-[12vh] px-4">
         <div className="absolute inset-0 z-0 bg-black/45" onClick={onClose} aria-hidden />
         <div
           className="relative z-[1] w-full max-w-lg border-2 bg-white overflow-hidden rounded-xl"
           style={{ borderColor: "var(--color-border)" }}
           onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-subscription-title"
         >
         <div className="flex items-center justify-between px-5 py-4 border-b-2" style={{ borderColor: "var(--color-border-soft)" }}>
-          <h3 className="text-xl font-heading">{selected ? "确认订阅" : "添加订阅"}</h3>
+          <h3 id="add-subscription-title" className="text-xl font-heading">{selected ? "确认订阅" : "添加订阅"}</h3>
           <button type="button" onClick={onClose} className="text-xs" style={{ color: "var(--color-ink-muted)" }}>
             关闭
           </button>
@@ -230,31 +250,60 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
         <div className="px-5 py-5">
           {!selected ? (
             <>
-              <input
-                type="text"
-                placeholder="搜索公众号名称或粘贴 MP_WXS_ ID，回车"
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") setQuery(inputValue.trim());
-                }}
-                className="input-search-pill text-lg mb-4"
-                autoFocus
-              />
+              <form onSubmit={handleSearch} className="flex flex-col sm:flex-row gap-2 mb-3">
+                <input
+                  type="text"
+                  aria-label="搜索公众号"
+                  placeholder="搜索公众号名称或粘贴 MP_WXS_ ID"
+                  value={inputValue}
+                  onChange={(e) => {
+                    setInputValue(e.target.value);
+                    setSearchValidation("");
+                  }}
+                  className="input-search-pill text-lg flex-1 min-w-0"
+                  autoFocus
+                  data-autofocus
+                />
+                <button
+                  type="submit"
+                  disabled={searchQuery.isFetching}
+                  className="btn-primary shrink-0 disabled:opacity-50"
+                >
+                  {searchQuery.isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  搜索
+                </button>
+              </form>
 
-              {searchQuery.isLoading && (
+              {searchValidation ? (
+                <p className="text-sm mb-3" style={{ color: "var(--color-danger)" }} role="alert">
+                  {searchValidation}
+                </p>
+              ) : null}
+
+              {searchQuery.isFetching && (
                 <div className="flex justify-center py-8">
                   <Loader2 className="h-5 w-5 animate-spin" style={{ color: "var(--color-ink-muted)" }} />
                 </div>
               )}
 
-              {searchQuery.data && searchQuery.data.length === 0 && query.length >= 2 && (
+              {searchQuery.isError && !searchQuery.isFetching ? (
+                <div className="rounded-lg border-2 px-4 py-4" style={{ borderColor: "var(--color-danger)" }} role="alert">
+                  <p className="text-sm mb-3" style={{ color: "var(--color-danger)" }}>
+                    {toUserMessage(searchQuery.error)}
+                  </p>
+                  <button type="button" onClick={() => searchQuery.refetch()} className="btn-secondary text-sm px-3 py-1.5">
+                    重试
+                  </button>
+                </div>
+              ) : null}
+
+              {!searchQuery.isFetching && !searchQuery.isError && searchQuery.data && searchQuery.data.length === 0 && query.length >= 2 && (
                 <p className="text-center py-8 text-sm" style={{ color: "var(--color-ink-muted)" }}>
-                  未找到
+                  没有找到匹配的公众号，请换个名称或粘贴 MP_WXS_ ID。
                 </p>
               )}
 
-              {searchQuery.data && searchQuery.data.length > 0 && (
+              {!searchQuery.isFetching && !searchQuery.isError && searchQuery.data && searchQuery.data.length > 0 && (
                 <div className="max-h-72 overflow-y-auto rounded-md border-2" style={{ borderColor: "var(--color-border-soft)" }}>
                   {searchQuery.data.map((result) => (
                     <button
@@ -292,10 +341,11 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
               </div>
 
               <div>
-                <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-muted)" }}>
+                <label htmlFor="subscription-alias" className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-ink-muted)" }}>
                   显示名称
                 </label>
                 <input
+                  id="subscription-alias"
                   type="text"
                   value={alias}
                   onChange={(e) => setAlias(e.target.value)}
@@ -317,7 +367,7 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
                   {createMutation.isPending ? (
                     <span className="flex items-center justify-center gap-2">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      抓取中…
+                      添加中…
                     </span>
                   ) : (
                     "添加"
@@ -333,6 +383,57 @@ function AddSubscriptionModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+type InitialFetchState =
+  | { status: "pending" }
+  | { status: "success"; newCount: number }
+  | { status: "error"; message: string };
+
+function FirstFetchStatus({
+  state,
+  lastFetchAt,
+  onRetry,
+}: {
+  state?: InitialFetchState;
+  lastFetchAt?: number;
+  onRetry: () => void;
+}) {
+  if (state?.status === "pending") {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-sm" style={{ color: "var(--color-secondary)" }}>
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        首次抓取中…
+      </span>
+    );
+  }
+  if (state?.status === "success") {
+    return (
+      <span className="text-sm" style={{ color: "var(--color-success)" }}>
+        首次抓取完成 · 新增 {state.newCount} 篇
+      </span>
+    );
+  }
+  if (state?.status === "error") {
+    return (
+      <div>
+        <p className="text-sm mb-1" style={{ color: "var(--color-danger)" }}>
+          首次抓取失败
+        </p>
+        <p className="text-xs line-clamp-2 mb-1" style={{ color: "var(--color-ink-muted)" }}>
+          {state.message}
+        </p>
+        <button type="button" onClick={onRetry} className="text-xs underline underline-offset-2">
+          重试
+        </button>
+      </div>
+    );
+  }
+  return (
+    <span className="text-lg" style={{ color: "var(--color-ink-light)" }}>
+      {lastFetchAt ? formatRelativeTime(lastFetchAt) : "等待首次抓取"}
+    </span>
+  );
+}
+
 export default function SubscriptionsPage() {
   const showAlert = useAlertStore((s) => s.show);
   const [scheduleFor, setScheduleFor] = useState<Subscription | null>(null);
@@ -341,22 +442,67 @@ export default function SubscriptionsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState<"recent" | "name">("recent");
   const [pendingDelete, setPendingDelete] = useState<Subscription | null>(null);
+  const [initialFetches, setInitialFetches] = useState<Record<number, InitialFetchState>>({});
   const queryClient = useQueryClient();
 
-  const { data: subscriptions, isLoading } = useQuery({
+  const subscriptionsQuery = useQuery({
     queryKey: ["subscriptions"],
     queryFn: () => api.getSubscriptions(),
   });
 
-  const { data: accounts = [] } = useQuery({
+  const accountsQuery = useQuery({
     queryKey: ["accounts"],
     queryFn: () => api.getAccounts(),
   });
+  const subscriptions = subscriptionsQuery.data;
+  const accounts = accountsQuery.data ?? [];
+  const isLoading = subscriptionsQuery.isLoading || accountsQuery.isLoading;
+  const isLoadError = subscriptionsQuery.isError || accountsQuery.isError;
+  const activeAccountCount = accounts.filter((account) => account.status === "active").length;
+  const canAddSubscription = activeAccountCount > 0;
+
+  const runInitialFetch = async (subscriptionId: number) => {
+    setInitialFetches((current) => ({
+      ...current,
+      [subscriptionId]: { status: "pending" },
+    }));
+    try {
+      const result = await api.refreshSubscription(subscriptionId);
+      setInitialFetches((current) => ({
+        ...current,
+        [subscriptionId]: { status: "success", newCount: result.new_count },
+      }));
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["subscriptions"] }),
+        queryClient.invalidateQueries({ queryKey: ["articles", subscriptionId] }),
+        queryClient.invalidateQueries({ queryKey: ["global-articles"] }),
+      ]);
+    } catch (error) {
+      setInitialFetches((current) => ({
+        ...current,
+        [subscriptionId]: { status: "error", message: toUserMessage(error) },
+      }));
+    }
+  };
+
+  const handleSubscriptionCreated = (subscription: Subscription) => {
+    queryClient.setQueryData<Subscription[]>(["subscriptions"], (current) => {
+      if (!current) return [subscription];
+      if (current.some((item) => item.id === subscription.id)) return current;
+      return [subscription, ...current];
+    });
+    void runInitialFetch(subscription.id);
+  };
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.deleteSubscription(id),
-    onSuccess: () => {
+    onSuccess: (_data, deletedId) => {
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
+      setInitialFetches((current) => {
+        const next = { ...current };
+        delete next[deletedId];
+        return next;
+      });
     },
     onError: (err) => showAlert(toUserMessage(err)),
   });
@@ -375,7 +521,7 @@ export default function SubscriptionsPage() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["subscriptions"] });
       queryClient.invalidateQueries({ queryKey: ["articles"] });
-      showAlert(`全部拉取完成，新增 ${data.total_new} 篇文章`);
+      showAlert(`全部拉取完成，新增 ${data.total_new} 篇文章`, "success");
     },
     onError: (err) => showAlert(toUserMessage(err)),
   });
@@ -450,9 +596,9 @@ export default function SubscriptionsPage() {
     const total = subscriptions?.length ?? 0;
     const active = subscriptions?.filter((s) => !s.disabled).length ?? 0;
     const disabled = subscriptions?.filter((s) => s.disabled).length ?? 0;
-    const wereadOk = accounts.filter((a) => a.status === "active").length;
+    const wereadOk = activeAccountCount;
     return { total, active, disabled, wereadOk };
-  }, [subscriptions, accounts]);
+  }, [subscriptions, activeAccountCount]);
 
   return (
     <div className="page-enter w-full">
@@ -461,105 +607,129 @@ export default function SubscriptionsPage() {
           订阅
         </h1>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => refreshAllMutation.mutate()}
-            disabled={!subscriptions?.length || refreshAllMutation.isPending}
-            className="btn-secondary rounded-full text-base px-4 py-2 disabled:opacity-40"
-          >
-            {refreshAllMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.5} />
+          {subscriptions && subscriptions.length > 0 ? (
+            <>
+              <button
+                type="button"
+                onClick={() => refreshAllMutation.mutate()}
+                disabled={!canAddSubscription || refreshAllMutation.isPending}
+                className="btn-secondary rounded-full text-base px-4 py-2 disabled:opacity-40"
+              >
+                {refreshAllMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.5} />
+                ) : (
+                  <RefreshCw className="h-4 w-4 opacity-80" strokeWidth={2.5} />
+                )}
+                {refreshAllMutation.isPending ? "拉取中…" : "全部拉取"}
+              </button>
+              <button
+                type="button"
+                onClick={exportOPML}
+                className="btn-secondary rounded-full text-base px-4 py-2"
+              >
+                <Download className="h-4 w-4 opacity-80" strokeWidth={2.5} />
+                导出 OPML
+              </button>
+            </>
+          ) : null}
+          {subscriptions && subscriptions.length > 0 ? (
+            canAddSubscription ? (
+              <button
+                type="button"
+                onClick={() => setModalOpen(true)}
+                className="btn-primary rounded-full text-base px-5 py-2.5 gap-1.5"
+              >
+                <Plus className="h-4 w-4" strokeWidth={2.5} />
+                添加
+              </button>
             ) : (
-              <RefreshCw className="h-4 w-4 opacity-80" strokeWidth={2.5} />
-            )}
-            {refreshAllMutation.isPending ? "拉取中…" : "全部拉取"}
-          </button>
-          <button
-            type="button"
-            onClick={exportOPML}
-            disabled={!subscriptions?.length}
-            className="btn-secondary rounded-full text-base px-4 py-2 disabled:opacity-40"
-          >
-            <Download className="h-4 w-4 opacity-80" strokeWidth={2.5} />
-            导出 OPML
-          </button>
-          <button
-            type="button"
-            className="p-2 rounded-full border-2 transition-colors opacity-40 cursor-not-allowed"
-            style={{ borderColor: "var(--color-border-soft)" }}
-            title="筛选（即将支持）"
-            disabled
-          >
-            <SlidersHorizontal className="h-4 w-4" strokeWidth={2.5} />
-          </button>
-          <button
-            type="button"
-            className="p-2 rounded-full border-2 transition-colors opacity-40 cursor-not-allowed"
-            style={{ borderColor: "var(--color-border-soft)" }}
-            title="视图（即将支持）"
-            disabled
-          >
-            <ListFilter className="h-4 w-4" strokeWidth={2.5} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setModalOpen(true)}
-            className="btn-primary rounded-full text-base px-5 py-2.5 gap-1.5"
-          >
-            <Plus className="h-4 w-4" strokeWidth={2.5} />
-            添加
-          </button>
+              <Link to="/accounts" className="btn-primary rounded-full text-base px-5 py-2.5">
+                {accounts.length > 0 ? "查看账号状态" : "绑定账号"}
+              </Link>
+            )
+          ) : null}
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatMetric label="订阅总数" value={stats.total} dotColor="var(--color-stat-gray)" />
-        <StatMetric label="已启用" value={stats.active} dotColor="var(--color-stat-purple)" />
-        <StatMetric label="已停用" value={stats.disabled} dotColor="var(--color-stat-orange)" />
-        <StatMetric label="可用读书账号" value={stats.wereadOk} dotColor="var(--color-stat-green)" />
-      </div>
+      {subscriptions && subscriptions.length > 0 ? (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+          <StatMetric label="订阅总数" value={stats.total} dotColor="var(--color-stat-gray)" />
+          <StatMetric label="已启用" value={stats.active} dotColor="var(--color-stat-purple)" />
+          <StatMetric label="已停用" value={stats.disabled} dotColor="var(--color-stat-orange)" />
+          <StatMetric label="可用读书账号" value={stats.wereadOk} dotColor="var(--color-stat-green)" />
+        </div>
+      ) : null}
 
       <div className="panel-elevated">
-        <div
-          className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 sm:px-5 py-4 border-b-2"
-          style={{ borderColor: "var(--color-border-soft)" }}
-        >
-          <input
-            type="search"
-            placeholder="搜索订阅名称…"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="input-search-pill text-lg flex-1 min-w-0 max-w-md"
-          />
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value as "recent" | "name")}
-            className="text-base font-heading px-3 py-2 rounded-full border-2 outline-none cursor-pointer sm:ml-auto"
-            style={{
-              borderColor: "var(--color-border)",
-              backgroundColor: "var(--color-bg-surface)",
-              color: "var(--color-ink-muted)",
-            }}
+        {subscriptions && subscriptions.length > 0 ? (
+          <div
+            className="flex flex-col sm:flex-row sm:items-center gap-3 px-4 sm:px-5 py-4 border-b-2"
+            style={{ borderColor: "var(--color-border-soft)" }}
           >
-            <option value="recent">排序：最近添加</option>
-            <option value="name">排序：名称</option>
-          </select>
-        </div>
+            <input
+              type="search"
+              placeholder="搜索订阅名称…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="input-search-pill text-lg flex-1 min-w-0 max-w-md"
+            />
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as "recent" | "name")}
+              className="text-base font-heading px-3 py-2 rounded-full border-2 outline-none cursor-pointer sm:ml-auto"
+              style={{
+                borderColor: "var(--color-border)",
+                backgroundColor: "var(--color-bg-surface)",
+                color: "var(--color-ink-muted)",
+              }}
+            >
+              <option value="recent">排序：最近添加</option>
+              <option value="name">排序：名称</option>
+            </select>
+          </div>
+        ) : null}
 
         {isLoading ? (
           <div className="flex justify-center py-20">
             <Loader2 className="h-5 w-5 animate-spin" style={{ color: "var(--color-ink-muted)" }} />
           </div>
+        ) : isLoadError ? (
+          <div className="py-16 px-5 text-center" role="alert">
+            <p className="text-xl font-heading mb-2">订阅状态加载失败</p>
+            <p className="text-sm mb-5" style={{ color: "var(--color-ink-muted)" }}>
+              请检查服务连接后重试。
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                subscriptionsQuery.refetch();
+                accountsQuery.refetch();
+              }}
+              className="btn-primary rounded-full text-base px-5 py-2.5"
+            >
+              重新加载
+            </button>
+          </div>
         ) : !subscriptions || subscriptions.length === 0 ? (
           <div className="py-16 px-5 text-center">
             <p className="text-xl font-heading mb-1">还没有订阅</p>
             <p className="text-lg mb-5" style={{ color: "var(--color-ink-muted)" }}>
-              添加公众号后开始抓取文章
+              {canAddSubscription
+                ? "添加公众号后会自动进行首次抓取"
+                : accounts.length > 0
+                  ? "当前没有可用账号，请先恢复账号状态"
+                  : "添加订阅前，需要先绑定微信读书账号"}
             </p>
-            <button type="button" onClick={() => setModalOpen(true)} className="btn-primary rounded-full text-base px-5 py-2.5 gap-1.5">
-              <Plus className="h-4 w-4" strokeWidth={2.5} />
-              添加
-            </button>
+            {canAddSubscription ? (
+              <button type="button" onClick={() => setModalOpen(true)} className="btn-primary rounded-full text-base px-5 py-2.5 gap-1.5">
+                <Plus className="h-4 w-4" strokeWidth={2.5} />
+                添加
+              </button>
+            ) : (
+              <Link to="/accounts" className="btn-primary rounded-full text-base px-5 py-2.5">
+                {accounts.length > 0 ? "查看账号状态" : "去绑定账号"}
+              </Link>
+            )}
           </div>
         ) : (
           <>
@@ -597,8 +767,15 @@ export default function SubscriptionsPage() {
                       isPending={toggleMutation.isPending && toggleMutation.variables?.id === sub.id}
                     />
                   </div>
-                  <div className="col-span-2 text-lg" style={{ color: "var(--color-ink-light)" }}>
-                    {sub.last_fetch_at ? formatRelativeTime(sub.last_fetch_at) : "—"}
+                  <div className="col-span-2">
+                    <span className="sm:hidden text-xs mr-2" style={{ color: "var(--color-ink-faint)" }}>
+                      抓取状态
+                    </span>
+                    <FirstFetchStatus
+                      state={initialFetches[sub.id]}
+                      lastFetchAt={sub.last_fetch_at}
+                      onRetry={() => void runInitialFetch(sub.id)}
+                    />
                   </div>
                   <div className="col-span-2 text-lg tabular-nums" style={{ color: "var(--color-ink-muted)" }}>
                     <div>{formatInterval(sub.fetch_interval_sec)}</div>
@@ -643,7 +820,12 @@ export default function SubscriptionsPage() {
         )}
       </div>
 
-      {modalOpen && <AddSubscriptionModal onClose={() => setModalOpen(false)} />}
+      {modalOpen && canAddSubscription && (
+        <AddSubscriptionModal
+          onClose={() => setModalOpen(false)}
+          onCreated={handleSubscriptionCreated}
+        />
+      )}
 
       {scheduleFor && (
         <SubscriptionScheduleModal subscription={scheduleFor} onClose={() => setScheduleFor(null)} />

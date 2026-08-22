@@ -22,19 +22,23 @@ export function ConfirmDialog({
   if (!open) return null;
 
   return (
-    <ModalPortal>
+    <ModalPortal onClose={onCancel}>
       <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4">
         <div className="absolute inset-0 z-0 bg-black/40" onClick={onCancel} aria-hidden />
         <div
           className="relative z-[1] w-full max-w-sm border-2 bg-white p-6 rounded-xl"
           style={{ borderColor: "var(--color-border)" }}
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="confirm-dialog-title"
+          aria-describedby="confirm-dialog-description"
         >
-        <h3 className="text-2xl font-heading mb-2">{title}</h3>
-        <p className="text-sm leading-relaxed mb-6" style={{ color: "var(--color-ink-muted)" }}>
+        <h3 id="confirm-dialog-title" className="text-2xl font-heading mb-2">{title}</h3>
+        <p id="confirm-dialog-description" className="text-sm leading-relaxed mb-6" style={{ color: "var(--color-ink-muted)" }}>
           {description}
         </p>
         <div className="flex gap-2 justify-end">
-          <button type="button" onClick={onCancel} className="btn-secondary rounded text-sm px-4 py-2">
+          <button type="button" onClick={onCancel} className="btn-secondary rounded text-sm px-4 py-2" data-autofocus>
             {cancelText}
           </button>
           <button

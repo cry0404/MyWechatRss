@@ -40,3 +40,17 @@ func (h *ArticleHandlers) List(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, arts)
 }
+
+func (h *ArticleHandlers) Count(c *gin.Context) {
+	since, err := strconv.ParseInt(c.Query("since"), 10, 64)
+	if err != nil || since < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "since must be a Unix timestamp"})
+		return
+	}
+	count, err := h.Articles.Store.CountArticlesByUserSince(c.Request.Context(), auth.CurrentUserID(c), since)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"count": count})
+}
